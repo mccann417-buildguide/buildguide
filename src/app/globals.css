@@ -1,0 +1,10 @@
+/* src/app/globals.css */
+@import "tailwindcss";
+
+:root {
+  color-scheme: light;
+}
+
+* {
+  box-sizing: border-box;
+}
