@@ -3,9 +3,9 @@
 
 import React from "react";
 import Link from "next/link";
-import { useSearchParams } from "next/navigation";
 
 import { loadHistory, clearHistory } from "../lib/history";
+
 type AnyResult = any;
 
 type AskAIResponse = {
@@ -35,16 +35,25 @@ Red flags: ${(b.redFlags ?? []).slice(0, 3).join("; ")}
 }
 
 export default function AskPage() {
-  const params = useSearchParams();
-  const prefill = params.get("prefill") ?? "";
-
-  const [question, setQuestion] = React.useState(prefill);
+  const [question, setQuestion] = React.useState("");
   const [history, setHistory] = React.useState<AnyResult[]>([]);
   const [selectedId, setSelectedId] = React.useState<string>("");
 
   const [answer, setAnswer] = React.useState<AskAIResponse | null>(null);
   const [loading, setLoading] = React.useState(false);
   const [error, setError] = React.useState<string | null>(null);
+
+  // Read prefill from URL on the client (Vercel-safe)
+  React.useEffect(() => {
+    try {
+      const sp = new URLSearchParams(window.location.search);
+      const prefill = sp.get("prefill") ?? "";
+      if (prefill && !question) setQuestion(prefill);
+    } catch {
+      // ignore
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   React.useEffect(() => {
     const h = loadHistory();
