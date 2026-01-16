@@ -87,6 +87,113 @@ function trySaveDetailToHistory(baseId: string, detail: BidDetailAI) {
   }
 }
 
+function MarketComparisonCard({
+  paidAccess,
+  isSubscriber,
+  detail,
+  onUnlock,
+  onGenerate,
+  generating,
+}: {
+  paidAccess: boolean;
+  isSubscriber: boolean;
+  detail: BidDetailAI | null;
+  onUnlock: () => void;
+  onGenerate: () => void;
+  generating: boolean;
+}) {
+  const mc = detail?.marketComparison;
+
+  return (
+    <div className="rounded-2xl border p-5">
+      <div className="flex items-start justify-between gap-4">
+        <div>
+          <div className="text-sm font-semibold">📊 Local Bid Comparison</div>
+          <p className="mt-1 text-sm text-neutral-700">
+            Compare this bid to typical pricing in your area.
+            {isSubscriber ? (
+              <span className="font-semibold"> Included with your plan</span>
+            ) : (
+              <span className="font-semibold"> Unlock for $2.99</span>
+            )}
+            .
+          </p>
+        </div>
+
+        {!paidAccess ? (
+          <button
+            onClick={onUnlock}
+            className="shrink-0 rounded-xl bg-black text-white px-4 py-2.5 text-sm font-medium hover:bg-black/90"
+          >
+            Unlock $2.99 (demo)
+          </button>
+        ) : mc ? (
+          <div className="shrink-0 rounded-xl border px-4 py-2.5 text-sm font-medium">✅ Included</div>
+        ) : (
+          <button
+            onClick={onGenerate}
+            disabled={generating}
+            className="shrink-0 rounded-xl bg-black text-white px-4 py-2.5 text-sm font-medium disabled:opacity-50 hover:bg-black/90"
+          >
+            {generating ? "Generating…" : "Generate Snapshot"}
+          </button>
+        )}
+      </div>
+
+      {!paidAccess ? (
+        <div className="mt-4 rounded-2xl border bg-neutral-50 p-4">
+          <div className="text-sm font-semibold">Typical range (locked)</div>
+          <div className="mt-2 text-sm text-neutral-700">
+            Expected range: <span className="font-semibold">••••• · ••••• · •••••</span>
+          </div>
+          <div className="mt-1 text-sm text-neutral-700">
+            Verdict: <span className="font-semibold">••••••••••••</span>
+          </div>
+          <div className="mt-3 text-xs text-neutral-600">
+            🔒 Unlock to see the local pricing range + how this bid compares.
+          </div>
+        </div>
+      ) : null}
+
+      {paidAccess && !mc ? (
+        <div className="mt-4 rounded-2xl border bg-neutral-50 p-4">
+          <div className="text-sm text-neutral-800">
+            Click <span className="font-semibold">Generate Snapshot</span> to produce the local comparison from your bid +
+            inputs.
+          </div>
+        </div>
+      ) : null}
+
+      {paidAccess && mc ? (
+        <div className="mt-4 rounded-2xl border p-4">
+          <div className="text-sm text-neutral-700">
+            <div className="font-medium">{mc.area}</div>
+            <div className="mt-1">
+              Expected range:{" "}
+              <span className="font-semibold">
+                {mc.expectedRange.low} · {mc.expectedRange.mid} · {mc.expectedRange.high}
+              </span>
+            </div>
+            <div className="mt-1">
+              Verdict: <span className="font-semibold">{verdictLabel(mc.verdict)}</span>
+            </div>
+          </div>
+
+          {mc.notes?.length ? (
+            <ul className="mt-3 list-disc pl-5 text-sm text-neutral-800 space-y-1">
+              {mc.notes.map((x) => (
+                <li key={x}>{x}</li>
+              ))}
+            </ul>
+          ) : null}
+
+          <div className="mt-3 text-xs text-neutral-600">{mc.disclaimer}</div>
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
 export default function BidPage() {
   const [text, setText] = React.useState("");
   const [notes, setNotes] = React.useState(""); // optional context
@@ -106,7 +213,7 @@ export default function BidPage() {
   const [pdfLoading, setPdfLoading] = React.useState(false);
   const [pdfError, setPdfError] = React.useState<string | null>(null);
 
-  // Comparison inputs (Step 2)
+  // Comparison inputs
   const [compare, setCompare] = React.useState<CompareInputs>({
     area: "Troy, NY 12180",
     projectType: "",
@@ -197,7 +304,7 @@ export default function BidPage() {
 
       setDetail(data as BidDetailAI);
 
-      // ✅ store the detail into history so History Detail page can show it
+      // store the detail into history so History Detail page can show it
       trySaveDetailToHistory(result.id, data as BidDetailAI);
     } catch (e: any) {
       setDetailError(e?.message ?? "Something went wrong generating detail.");
@@ -252,7 +359,7 @@ export default function BidPage() {
   return (
     <FeatureGate kind="bid">
       {({ allowed, openPaywall, remaining, planId }) => {
-        // ✅ Subscribers should not need the $2.99 unlock
+        // Subscribers should not need the $2.99 unlock
         const isSubscriber = planId !== "free";
         const paidAccess = isSubscriber || addonUnlocked;
 
@@ -271,10 +378,16 @@ export default function BidPage() {
               </div>
 
               <div className="flex gap-2">
-                <Link href="/history" className="rounded-xl border px-4 py-2 text-sm font-medium hover:bg-neutral-50">
+                <Link
+                  href="/history"
+                  className="rounded-xl border px-4 py-2 text-sm font-medium hover:bg-neutral-50"
+                >
                   History
                 </Link>
-                <Link href="/" className="rounded-xl border px-4 py-2 text-sm font-medium hover:bg-neutral-50">
+                <Link
+                  href="/"
+                  className="rounded-xl border px-4 py-2 text-sm font-medium hover:bg-neutral-50"
+                >
                   Back home
                 </Link>
               </div>
@@ -340,6 +453,20 @@ export default function BidPage() {
                 <ResultSection title="📄 What’s Included" icon="📄" items={result.included} />
                 <ResultSection title="⚠️ What’s Missing" icon="⚠️" items={result.missing} />
                 <ResultSection title="🚩 Red Flags" icon="🚩" items={result.redFlags} />
+
+                {/* Local comparison (paid) */}
+                <MarketComparisonCard
+                  paidAccess={paidAccess}
+                  isSubscriber={isSubscriber}
+                  detail={detail}
+                  generating={detailLoading}
+                  onGenerate={generateDetailAI}
+                  onUnlock={() => {
+                    if (!result) return;
+                    setAddonUnlocked(result.id);
+                    setAddonUnlockedState(true);
+                  }}
+                />
 
                 {/* Paid layer */}
                 <div className="rounded-2xl border p-5">
@@ -529,38 +656,6 @@ export default function BidPage() {
 
                         {detailError ? <div className="mt-3 text-sm text-red-600">{detailError}</div> : null}
                       </div>
-
-                      {/* Market Snapshot UI */}
-                      {detail?.marketComparison ? (
-                        <div className="rounded-2xl border p-4">
-                          <div className="font-semibold">📊 Troy, NY Market Snapshot</div>
-
-                          <div className="mt-2 text-sm text-neutral-700">
-                            <div className="font-medium">{detail.marketComparison.area}</div>
-                            <div className="mt-1">
-                              Expected range:{" "}
-                              <span className="font-semibold">
-                                {detail.marketComparison.expectedRange.low} · {detail.marketComparison.expectedRange.mid} ·{" "}
-                                {detail.marketComparison.expectedRange.high}
-                              </span>
-                            </div>
-                            <div className="mt-1">
-                              Verdict:{" "}
-                              <span className="font-semibold">{verdictLabel(detail.marketComparison.verdict)}</span>
-                            </div>
-                          </div>
-
-                          {detail.marketComparison.notes?.length ? (
-                            <ul className="mt-3 list-disc pl-5 text-sm text-neutral-800 space-y-1">
-                              {detail.marketComparison.notes.map((x) => (
-                                <li key={x}>{x}</li>
-                              ))}
-                            </ul>
-                          ) : null}
-
-                          <div className="mt-3 text-xs text-neutral-600">{detail.marketComparison.disclaimer}</div>
-                        </div>
-                      ) : null}
 
                       {/* PDF Export */}
                       <div className="rounded-2xl border p-4">

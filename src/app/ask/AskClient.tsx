@@ -42,17 +42,18 @@ export default function AskClient() {
   const [loading, setLoading] = React.useState(false);
   const [error, setError] = React.useState<string | null>(null);
 
+  // Prefill from URL
   React.useEffect(() => {
     try {
       const sp = new URLSearchParams(window.location.search);
       const prefill = sp.get("prefill") ?? "";
-      if (prefill && !question) setQuestion(prefill);
+      if (prefill) setQuestion(prefill);
     } catch {
       // ignore
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  // Load history
   React.useEffect(() => {
     const h = loadHistory();
     setHistory(h);
@@ -94,6 +95,7 @@ export default function AskClient() {
             Ask anything — and optionally attach context from your last photo or bid check.
           </p>
         </div>
+
         <Link
           href="/"
           className="rounded-xl border px-4 py-2 text-sm font-medium hover:bg-neutral-50"
