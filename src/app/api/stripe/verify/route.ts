@@ -13,15 +13,10 @@ function requireEnv(name: string) {
 export async function POST(req: Request) {
   try {
     const stripeSecretKey = requireEnv("STRIPE_SECRET_KEY");
-
-    // ✅ IMPORTANT:
-    // - Do NOT pass apiVersion here (it causes TS/version mismatch for many installs)
-    // - Cast to any so TS doesn't complain about constructor signature
-    const stripe = new Stripe(stripeSecretKey as any);
+    const stripe = new Stripe(stripeSecretKey);
 
     const body = await req.json().catch(() => null);
     const sessionId = String(body?.sessionId ?? "").trim();
-
     if (!sessionId) {
       return NextResponse.json({ error: "Missing sessionId" }, { status: 400 });
     }
@@ -29,18 +24,14 @@ export async function POST(req: Request) {
     const session = await stripe.checkout.sessions.retrieve(sessionId);
 
     const paid = session.payment_status === "paid";
-    const resultId = String(session.metadata?.resultId ?? "").trim();
+    const resultId = String(session.metadata?.resultId ?? "");
 
     return NextResponse.json({
       paid,
       resultId,
-      payment_status: session.payment_status,
+      customerEmail: session.customer_details?.email ?? null,
     });
   } catch (err: any) {
-    console.error("stripe verify error:", err);
-    return NextResponse.json(
-      { error: err?.message ?? "Verify failed" },
-      { status: 500 }
-    );
+    return NextResponse.json({ error: err?.message ?? "Verify failed." }, { status: 500 });
   }
 }
