@@ -30,15 +30,15 @@ type BidDetailAI = {
 };
 
 type CompareInputs = {
-  area: string; // e.g. "Troy, NY 12180"
-  projectType: string; // kitchen, bath, roof, deck, etc.
-  approxSqft: string; // "1200"
+  area: string;
+  projectType: string;
+  approxSqft: string;
   finishLevel: "budget" | "mid" | "high" | "unknown";
   permits: "yes" | "no" | "unknown";
   includesDemo: "yes" | "no" | "unknown";
-  timeline: string; // "ASAP", "2 weeks", etc.
-  accessNotes: string; // tight driveway, stairs, occupied, etc.
-  extraNotes: string; // anything else
+  timeline: string;
+  accessNotes: string;
+  extraNotes: string;
 };
 
 const HISTORY_KEY = "buildguide_history";
@@ -46,12 +46,10 @@ const HISTORY_KEY = "buildguide_history";
 function addonKey(resultId: string) {
   return `buildguide_bid_addon_unlocked_${resultId}`;
 }
-
 function isAddonUnlocked(resultId: string): boolean {
   if (typeof window === "undefined") return false;
   return window.localStorage.getItem(addonKey(resultId)) === "1";
 }
-
 function setAddonUnlocked(resultId: string) {
   if (typeof window === "undefined") return;
   window.localStorage.setItem(addonKey(resultId), "1");
@@ -74,7 +72,6 @@ function trySaveDetailToHistory(baseId: string, detail: BidDetailAI) {
     const idx = parsed.findIndex((x) => String(x?.id) === String(baseId));
     if (idx === -1) return;
 
-    // Attach detail and a timestamp (doesn't break older items)
     parsed[idx] = {
       ...parsed[idx],
       detail,
@@ -125,10 +122,12 @@ function MarketComparisonCard({
             onClick={onUnlock}
             className="shrink-0 rounded-xl bg-black text-white px-4 py-2.5 text-sm font-medium hover:bg-black/90"
           >
-            Unlock $2.99 (demo)
+            Unlock $2.99
           </button>
         ) : mc ? (
-          <div className="shrink-0 rounded-xl border px-4 py-2.5 text-sm font-medium">✅ Included</div>
+          <div className="shrink-0 rounded-xl border px-4 py-2.5 text-sm font-medium">
+            ✅ Included
+          </div>
         ) : (
           <button
             onClick={onGenerate}
@@ -196,24 +195,26 @@ function MarketComparisonCard({
 
 export default function BidPage() {
   const [text, setText] = React.useState("");
-  const [notes, setNotes] = React.useState(""); // optional context
+  const [notes, setNotes] = React.useState("");
   const [loading, setLoading] = React.useState(false);
   const [result, setResult] = React.useState<BidAnalysisResult | null>(null);
   const [error, setError] = React.useState<string | null>(null);
 
-  // $2.99 add-on state (per report) — still used for free users
   const [addonUnlocked, setAddonUnlockedState] = React.useState(false);
 
-  // AI detailed report state
+  // Stripe checkout
+  const [checkoutLoading, setCheckoutLoading] = React.useState(false);
+  const [checkoutError, setCheckoutError] = React.useState<string | null>(null);
+
+  // AI detailed report
   const [detail, setDetail] = React.useState<BidDetailAI | null>(null);
   const [detailLoading, setDetailLoading] = React.useState(false);
   const [detailError, setDetailError] = React.useState<string | null>(null);
 
-  // PDF export state
+  // PDF export
   const [pdfLoading, setPdfLoading] = React.useState(false);
   const [pdfError, setPdfError] = React.useState<string | null>(null);
 
-  // Comparison inputs
   const [compare, setCompare] = React.useState<CompareInputs>({
     area: "Troy, NY 12180",
     projectType: "",
@@ -226,13 +227,41 @@ export default function BidPage() {
     extraNotes: "",
   });
 
+  async function startStripeCheckout() {
+    if (!result) return;
+
+    setCheckoutLoading(true);
+    setCheckoutError(null);
+
+    try {
+      const res = await fetch("/api/stripe/checkout", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ resultId: result.id }),
+      });
+
+      const data = await res.json();
+      if (!res.ok) throw new Error(data?.error ?? "Checkout failed.");
+
+      if (data?.url) {
+        window.location.href = data.url;
+        return;
+      }
+      throw new Error("No checkout URL returned.");
+    } catch (e: any) {
+      setCheckoutError(e?.message ?? "Checkout failed.");
+    } finally {
+      setCheckoutLoading(false);
+    }
+  }
+
   async function runBidAnalysis() {
     setLoading(true);
     setError(null);
     setResult(null);
     setAddonUnlockedState(false);
+    setCheckoutError(null);
 
-    // reset detail + pdf when re-running
     setDetail(null);
     setDetailError(null);
     setDetailLoading(false);
@@ -243,10 +272,7 @@ export default function BidPage() {
       const res = await fetch("/api/bid", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          text,
-          notes: notes.trim() || undefined,
-        }),
+        body: JSON.stringify({ text, notes: notes.trim() || undefined }),
       });
 
       if (!res.ok) throw new Error("Bid analysis failed.");
@@ -254,11 +280,9 @@ export default function BidPage() {
       const data = (await res.json()) as BidAnalysisResult;
       setResult(data);
 
-      // Count usage only after a successful analysis
       incrementUsage("bid");
       saveToHistory(data);
 
-      // Restore add-on unlock state for this report
       const unlocked = isAddonUnlocked(data.id);
       setAddonUnlockedState(unlocked);
     } catch (e: any) {
@@ -288,7 +312,6 @@ export default function BidPage() {
           timeline: compare.timeline || undefined,
           accessNotes: compare.accessNotes || undefined,
           extraNotes: compare.extraNotes || undefined,
-          // also include the user's original notes box (often very useful)
           jobNotes: notes.trim() || undefined,
         },
       };
@@ -303,8 +326,6 @@ export default function BidPage() {
       if (!res.ok) throw new Error(data?.error ?? "Detailed report failed.");
 
       setDetail(data as BidDetailAI);
-
-      // store the detail into history so History Detail page can show it
       trySaveDetailToHistory(result.id, data as BidDetailAI);
     } catch (e: any) {
       setDetailError(e?.message ?? "Something went wrong generating detail.");
@@ -323,10 +344,7 @@ export default function BidPage() {
       const res = await fetch("/api/bid-pdf", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          base: result,
-          detail: detail ?? null, // include marketComparison if present
-        }),
+        body: JSON.stringify({ base: result, detail: detail ?? null }),
       });
 
       if (!res.ok) {
@@ -359,7 +377,6 @@ export default function BidPage() {
   return (
     <FeatureGate kind="bid">
       {({ allowed, openPaywall, remaining, planId }) => {
-        // Subscribers should not need the $2.99 unlock
         const isSubscriber = planId !== "free";
         const paidAccess = isSubscriber || addonUnlocked;
 
@@ -378,16 +395,10 @@ export default function BidPage() {
               </div>
 
               <div className="flex gap-2">
-                <Link
-                  href="/history"
-                  className="rounded-xl border px-4 py-2 text-sm font-medium hover:bg-neutral-50"
-                >
+                <Link href="/history" className="rounded-xl border px-4 py-2 text-sm font-medium hover:bg-neutral-50">
                   History
                 </Link>
-                <Link
-                  href="/"
-                  className="rounded-xl border px-4 py-2 text-sm font-medium hover:bg-neutral-50"
-                >
+                <Link href="/" className="rounded-xl border px-4 py-2 text-sm font-medium hover:bg-neutral-50">
                   Back home
                 </Link>
               </div>
@@ -409,7 +420,6 @@ export default function BidPage() {
                 className="w-full min-h-[180px] rounded-2xl border p-3 text-sm"
               />
 
-              {/* Optional context */}
               <div className="rounded-2xl border p-4">
                 <div className="text-sm font-semibold">Optional: Job context</div>
                 <p className="mt-1 text-xs text-neutral-600">
@@ -454,27 +464,21 @@ export default function BidPage() {
                 <ResultSection title="⚠️ What’s Missing" icon="⚠️" items={result.missing} />
                 <ResultSection title="🚩 Red Flags" icon="🚩" items={result.redFlags} />
 
-                {/* Local comparison (paid) */}
                 <MarketComparisonCard
                   paidAccess={paidAccess}
                   isSubscriber={isSubscriber}
                   detail={detail}
                   generating={detailLoading}
                   onGenerate={generateDetailAI}
-                  onUnlock={() => {
-                    if (!result) return;
-                    setAddonUnlocked(result.id);
-                    setAddonUnlockedState(true);
-                  }}
+                  onUnlock={startStripeCheckout}
                 />
 
-                {/* Paid layer */}
                 <div className="rounded-2xl border p-5">
                   <div className="flex items-start justify-between gap-4">
                     <div>
                       <div className="text-sm font-semibold">Detailed Report</div>
                       <p className="mt-1 text-sm text-neutral-700">
-                        Unlock deeper detail, PDF export, and a Troy, NY market comparison.
+                        Unlock deeper detail, PDF export, and a local market comparison.
                         {!isSubscriber ? <span className="font-semibold"> One-time $2.99</span> : null}
                         {isSubscriber ? <span className="font-semibold"> Included with your plan</span> : null}
                         .
@@ -483,18 +487,18 @@ export default function BidPage() {
 
                     {!paidAccess ? (
                       <button
-                        onClick={() => {
-                          setAddonUnlocked(result.id);
-                          setAddonUnlockedState(true);
-                        }}
-                        className="shrink-0 rounded-xl bg-black text-white px-4 py-2.5 text-sm font-medium hover:bg-black/90"
+                        onClick={startStripeCheckout}
+                        disabled={checkoutLoading}
+                        className="shrink-0 rounded-xl bg-black text-white px-4 py-2.5 text-sm font-medium disabled:opacity-50 hover:bg-black/90"
                       >
-                        Unlock $2.99 (demo)
+                        {checkoutLoading ? "Opening…" : "Unlock $2.99"}
                       </button>
                     ) : (
                       <div className="shrink-0 rounded-xl border px-4 py-2.5 text-sm font-medium">✅ Unlocked</div>
                     )}
                   </div>
+
+                  {checkoutError ? <div className="mt-3 text-sm text-red-600">{checkoutError}</div> : null}
 
                   {!paidAccess ? (
                     <div className="mt-4 rounded-2xl border bg-neutral-50 p-4">
@@ -505,7 +509,7 @@ export default function BidPage() {
                           "Payment schedule red flags",
                           "Negotiation tips",
                           "Printable PDF report",
-                          "Troy, NY market comparison snapshot",
+                          "Local market comparison snapshot",
                         ].map((f) => (
                           <li key={f} className="flex gap-2">
                             <span className="mt-[2px]">🔒</span>
@@ -516,9 +520,8 @@ export default function BidPage() {
                     </div>
                   ) : (
                     <div className="mt-4 space-y-3">
-                      {/* Comparison inputs */}
                       <div className="rounded-2xl border p-4">
-                        <div className="font-semibold">📍 Market Comparison Inputs (Troy, NY)</div>
+                        <div className="font-semibold">📍 Market Comparison Inputs</div>
                         <p className="mt-1 text-sm text-neutral-700">
                           The more input you give, the better the market comparison gets.
                         </p>
@@ -657,7 +660,6 @@ export default function BidPage() {
                         {detailError ? <div className="mt-3 text-sm text-red-600">{detailError}</div> : null}
                       </div>
 
-                      {/* PDF Export */}
                       <div className="rounded-2xl border p-4">
                         <div className="flex items-center justify-between gap-3">
                           <div>
@@ -679,7 +681,6 @@ export default function BidPage() {
                         {pdfError ? <div className="mt-3 text-sm text-red-600">{pdfError}</div> : null}
                       </div>
 
-                      {/* AI Detail sections */}
                       {detail ? (
                         <div className="rounded-2xl border p-4">
                           <div className="font-semibold">📌 Deeper Detail (AI)</div>
