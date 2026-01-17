@@ -10,7 +10,6 @@ function addonKey(resultId: string) {
 
 export default function PaySuccessPage() {
   const [msg, setMsg] = React.useState("Verifying payment…");
-  const [status, setStatus] = React.useState<"checking" | "paid" | "not_paid" | "error">("checking");
 
   React.useEffect(() => {
     async function run() {
@@ -20,7 +19,6 @@ export default function PaySuccessPage() {
         const resultIdFromUrl = sp.get("resultId") ?? "";
 
         if (!sessionId) {
-          setStatus("error");
           setMsg("Missing Stripe session id.");
           return;
         }
@@ -38,19 +36,18 @@ export default function PaySuccessPage() {
           const resultId = String(data?.resultId || resultIdFromUrl || "");
           if (resultId) localStorage.setItem(addonKey(resultId), "1");
 
-          setStatus("paid");
-          setMsg("Payment verified. ✅ Unlock applied.");
+          setMsg("Payment verified ✅ Unlock applied. Redirecting…");
 
           setTimeout(() => {
-            window.location.href = "/bid";
+            window.location.href = resultId
+              ? `/history/${encodeURIComponent(resultId)}`
+              : "/history";
           }, 900);
           return;
         }
 
-        setStatus("not_paid");
         setMsg("Payment not completed yet.");
       } catch (e: any) {
-        setStatus("error");
         setMsg(e?.message ?? "Something went wrong verifying payment.");
       }
     }
@@ -66,17 +63,19 @@ export default function PaySuccessPage() {
       </div>
 
       <div className="flex gap-3">
-        <Link href="/bid" className="rounded-xl bg-black text-white px-4 py-2 text-sm font-medium hover:bg-black/90">
+        <Link
+          href="/history"
+          className="rounded-xl border px-4 py-2 text-sm font-medium hover:bg-neutral-50"
+        >
+          Open History
+        </Link>
+        <Link
+          href="/bid"
+          className="rounded-xl bg-black text-white px-4 py-2 text-sm font-medium hover:bg-black/90"
+        >
           Back to Bid Check
         </Link>
-        <Link href="/history" className="rounded-xl border px-4 py-2 text-sm font-medium hover:bg-neutral-50">
-          History
-        </Link>
       </div>
-
-      {status === "checking" ? (
-        <div className="rounded-2xl border p-4 text-sm text-neutral-700">Checking with Stripe…</div>
-      ) : null}
     </main>
   );
 }

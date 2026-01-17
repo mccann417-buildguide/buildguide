@@ -1,6 +1,6 @@
 // src/app/api/stripe/verify/route.ts
-import Stripe from "stripe";
 import { NextResponse } from "next/server";
+import Stripe from "stripe";
 
 export const runtime = "nodejs";
 
@@ -17,6 +17,7 @@ export async function POST(req: Request) {
 
     const body = await req.json().catch(() => null);
     const sessionId = String(body?.sessionId ?? "").trim();
+
     if (!sessionId) {
       return NextResponse.json({ error: "Missing sessionId" }, { status: 400 });
     }
@@ -24,14 +25,19 @@ export async function POST(req: Request) {
     const session = await stripe.checkout.sessions.retrieve(sessionId);
 
     const paid = session.payment_status === "paid";
-    const resultId = String(session.metadata?.resultId ?? "");
+    const resultId = String(session.metadata?.resultId ?? "").trim();
 
     return NextResponse.json({
       paid,
       resultId,
+      payment_status: session.payment_status,
       customerEmail: session.customer_details?.email ?? null,
     });
   } catch (err: any) {
-    return NextResponse.json({ error: err?.message ?? "Verify failed." }, { status: 500 });
+    console.error("stripe verify error:", err);
+    return NextResponse.json(
+      { error: err?.message ?? "Verify failed." },
+      { status: 500 }
+    );
   }
 }
