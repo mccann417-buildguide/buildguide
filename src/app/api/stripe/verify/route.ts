@@ -13,22 +13,30 @@ function requireEnv(name: string) {
 export async function POST(req: Request) {
   try {
     const stripeSecretKey = requireEnv("STRIPE_SECRET_KEY");
-const stripe = new Stripe(stripeSecretKey);
+
+    // Stripe SDK (no apiVersion needed here—works fine without it)
+    const stripe = new Stripe(stripeSecretKey);
 
     const body = await req.json().catch(() => null);
     const sessionId = String(body?.sessionId ?? "").trim();
+
     if (!sessionId) {
       return NextResponse.json({ error: "Missing sessionId" }, { status: 400 });
     }
 
     const session = await stripe.checkout.sessions.retrieve(sessionId);
 
-    const paid = session.payment_status === "paid";
+    // Treat "no_payment_required" as unlocked (covers edge cases like $0 sessions)
+    const paid =
+      session.status === "complete" &&
+      (session.payment_status === "paid" || session.payment_status === "no_payment_required");
+
     const resultId = String(session.metadata?.resultId ?? "");
 
     return NextResponse.json({
       paid,
       resultId,
+      status: session.status,
       payment_status: session.payment_status,
     });
   } catch (err: any) {
