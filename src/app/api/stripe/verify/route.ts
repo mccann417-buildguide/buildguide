@@ -14,8 +14,10 @@ export async function POST(req: Request) {
   try {
     const stripeSecretKey = requireEnv("STRIPE_SECRET_KEY");
 
-    // Stripe SDK (no apiVersion needed here—works fine without it)
-    const stripe = new Stripe(stripeSecretKey);
+    // ✅ IMPORTANT:
+    // - Do NOT pass apiVersion here (it causes TS/version mismatch for many installs)
+    // - Cast to any so TS doesn't complain about constructor signature
+    const stripe = new Stripe(stripeSecretKey as any);
 
     const body = await req.json().catch(() => null);
     const sessionId = String(body?.sessionId ?? "").trim();
@@ -26,21 +28,19 @@ export async function POST(req: Request) {
 
     const session = await stripe.checkout.sessions.retrieve(sessionId);
 
-    // Treat "no_payment_required" as unlocked (covers edge cases like $0 sessions)
-    const paid =
-      session.status === "complete" &&
-      (session.payment_status === "paid" || session.payment_status === "no_payment_required");
-
-    const resultId = String(session.metadata?.resultId ?? "");
+    const paid = session.payment_status === "paid";
+    const resultId = String(session.metadata?.resultId ?? "").trim();
 
     return NextResponse.json({
       paid,
       resultId,
-      status: session.status,
       payment_status: session.payment_status,
     });
   } catch (err: any) {
-    console.error(err);
-    return NextResponse.json({ error: err?.message ?? "Verify failed" }, { status: 500 });
+    console.error("stripe verify error:", err);
+    return NextResponse.json(
+      { error: err?.message ?? "Verify failed" },
+      { status: 500 }
+    );
   }
 }
