@@ -1,43 +1,25 @@
-// src/app/api/stripe/verify/route.ts
 import { NextResponse } from "next/server";
 import Stripe from "stripe";
 
 export const runtime = "nodejs";
 
-function requireEnv(name: string) {
-  const v = process.env[name];
-  if (!v) throw new Error(`Missing env var: ${name}`);
-  return v;
-}
-
 export async function POST(req: Request) {
   try {
-    const stripeSecretKey = requireEnv("STRIPE_SECRET_KEY");
-    const stripe = new Stripe(stripeSecretKey);
+    const stripe = new Stripe(process.env.STRIPE_SECRET_KEY!);
 
-    const body = await req.json().catch(() => null);
-    const sessionId = String(body?.sessionId ?? "").trim();
-
+    const { sessionId } = await req.json();
     if (!sessionId) {
       return NextResponse.json({ error: "Missing sessionId" }, { status: 400 });
     }
 
     const session = await stripe.checkout.sessions.retrieve(sessionId);
 
-    const paid = session.payment_status === "paid";
-    const resultId = String(session.metadata?.resultId ?? "").trim();
-
     return NextResponse.json({
-      paid,
-      resultId,
-      payment_status: session.payment_status,
-      customerEmail: session.customer_details?.email ?? null,
+      paid: session.payment_status === "paid",
+      resultId: session.metadata?.resultId || "",
     });
-  } catch (err: any) {
-    console.error("stripe verify error:", err);
-    return NextResponse.json(
-      { error: err?.message ?? "Verify failed." },
-      { status: 500 }
-    );
+  } catch (e: any) {
+    console.error(e);
+    return NextResponse.json({ error: e.message }, { status: 500 });
   }
 }

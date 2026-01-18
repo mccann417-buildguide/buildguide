@@ -1,81 +1,43 @@
-// src/app/pay/success/page.tsx
 "use client";
 
-import React from "react";
-import Link from "next/link";
+import { useEffect, useState } from "react";
+import { useSearchParams, useRouter } from "next/navigation";
 
-function addonKey(resultId: string) {
-  return `buildguide_bid_addon_unlocked_${resultId}`;
-}
+const key = (id: string) => `buildguide_bid_addon_unlocked_${id}`;
 
-export default function PaySuccessPage() {
-  const [msg, setMsg] = React.useState("Verifying payment…");
+export default function SuccessPage() {
+  const sp = useSearchParams();
+  const router = useRouter();
+  const [msg, setMsg] = useState("Verifying payment…");
 
-  React.useEffect(() => {
-    async function run() {
-      try {
-        const sp = new URLSearchParams(window.location.search);
-        const sessionId = sp.get("session_id") ?? "";
-        const resultIdFromUrl = sp.get("resultId") ?? "";
+  useEffect(() => {
+    const sessionId = sp.get("session_id");
+    const resultId = sp.get("resultId");
 
-        if (!sessionId) {
-          setMsg("Missing Stripe session id.");
-          return;
-        }
-
-        const res = await fetch("/api/stripe/verify", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ sessionId }),
-        });
-
-        const data = await res.json();
-        if (!res.ok) throw new Error(data?.error ?? "Verify failed.");
-
-        if (data?.paid) {
-          const resultId = String(data?.resultId || resultIdFromUrl || "");
-          if (resultId) localStorage.setItem(addonKey(resultId), "1");
-
-          setMsg("Payment verified ✅ Unlock applied. Redirecting…");
-
-          setTimeout(() => {
-            window.location.href = resultId
-              ? `/history/${encodeURIComponent(resultId)}`
-              : "/history";
-          }, 900);
-          return;
-        }
-
-        setMsg("Payment not completed yet.");
-      } catch (e: any) {
-        setMsg(e?.message ?? "Something went wrong verifying payment.");
-      }
+    if (!sessionId || !resultId) {
+      setMsg("Missing payment info.");
+      return;
     }
 
-    run();
+    fetch("/api/stripe/verify", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ sessionId }),
+    })
+      .then(res => res.json())
+      .then(data => {
+        if (data.paid) {
+          localStorage.setItem(key(resultId), "1");
+          setMsg("Payment confirmed. Unlocking report…");
+          setTimeout(() => {
+            router.replace(`/history/${resultId}`);
+          }, 600);
+        } else {
+          setMsg("Payment not confirmed.");
+        }
+      })
+      .catch(() => setMsg("Verification failed."));
   }, []);
 
-  return (
-    <main className="mx-auto max-w-3xl px-6 py-14 space-y-6">
-      <div>
-        <h1 className="text-2xl font-semibold">Payment Status</h1>
-        <p className="mt-2 text-neutral-700">{msg}</p>
-      </div>
-
-      <div className="flex gap-3">
-        <Link
-          href="/history"
-          className="rounded-xl border px-4 py-2 text-sm font-medium hover:bg-neutral-50"
-        >
-          Open History
-        </Link>
-        <Link
-          href="/bid"
-          className="rounded-xl bg-black text-white px-4 py-2 text-sm font-medium hover:bg-black/90"
-        >
-          Back to Bid Check
-        </Link>
-      </div>
-    </main>
-  );
+  return <div className="p-10 text-lg">{msg}</div>;
 }
