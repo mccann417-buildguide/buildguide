@@ -1,7 +1,6 @@
 // src/app/api/bid-detail/route.ts
 import { NextResponse } from "next/server";
-
-import { openai, requireEnv } from "../../lib/openai";
+import { getOpenAI } from "../../lib/openai";
 
 export const runtime = "nodejs";
 
@@ -26,7 +25,7 @@ type BidBase = {
 };
 
 type DetailContext = {
-  area?: string; // "Troy, NY 12180"
+  area?: string;
   projectType?: string;
   approxSqft?: string;
   finishLevel?: "budget" | "mid" | "high" | "unknown";
@@ -40,7 +39,7 @@ type DetailContext = {
 
 export async function POST(req: Request) {
   try {
-    requireEnv("OPENAI_API_KEY");
+    const openai = getOpenAI();
 
     const body = await req.json().catch(() => null);
     const base = (body?.base ?? null) as BidBase | null;
@@ -72,16 +71,13 @@ Return ONLY valid JSON matching EXACTLY this shape:
 }
 
 Rules:
-- Be cautious. No guarantees. No “this is definitely wrong”.
+- Be cautious. No guarantees.
 - Use base.typicalRange IF PROVIDED as the anchor for expectedRange.
 - If typicalRange is missing/unhelpful, estimate a rough expected range anyway for ${area}, but set verdict="unknown".
-- marketComparison.notes: explain what affects range (scope, demo, permits, finish level, access, timeline).
-- Include a note that “more input = tighter comparison” if context is thin.
 - marketComparison.disclaimer must be: "This is a rough market snapshot. Exact pricing depends on scope and site conditions."
-- Keep bullets short and practical.
 - pdfSummary: 6–10 lines, client-friendly.
 
-Context (may be empty):
+Context:
 - projectType: ${context?.projectType ?? ""}
 - approxSqft/size: ${context?.approxSqft ?? ""}
 - finishLevel: ${context?.finishLevel ?? "unknown"}
@@ -98,29 +94,23 @@ Input base JSON follows.
     const r = await openai.responses.create({
       model: "gpt-4o-mini",
       input: [
-        {
-          role: "system",
-          content:
-            "You are BuildGuide Bid Detail. You provide a rough market snapshot and negotiation insights. Output ONLY JSON.",
-        },
-        {
-          role: "user",
-          content: prompt + "\n\nBASE:\n" + JSON.stringify(base, null, 2),
-        },
+        { role: "system", content: "You are BuildGuide Bid Detail. Output ONLY JSON." },
+        { role: "user", content: prompt + "\n\nBASE:\n" + JSON.stringify(base, null, 2) },
       ],
     });
 
     const raw = r.output_text ?? "";
     const json = extractJson(raw);
 
-    // Normalize
     const safeArr = (v: any) => (Array.isArray(v) ? v.filter(Boolean).map(String) : []);
     const safeStr = (v: any, fb = "") => (typeof v === "string" ? v : fb);
 
     const expected =
-      json?.marketComparison?.expectedRange ?? base.typicalRange ?? { low: "—", mid: "—", high: "—" };
+      json?.marketComparison?.expectedRange ??
+      base.typicalRange ??
+      { low: "—", mid: "—", high: "—" };
 
-    const cleaned = {
+    return NextResponse.json({
       deeperIssues: safeArr(json?.deeperIssues),
       paymentScheduleNotes: safeArr(json?.paymentScheduleNotes),
       contractWarnings: safeArr(json?.contractWarnings),
@@ -141,12 +131,9 @@ Input base JSON follows.
             ? json.marketComparison.verdict
             : "unknown",
         notes: safeArr(json?.marketComparison?.notes),
-        disclaimer:
-          "This is a rough market snapshot. Exact pricing depends on scope and site conditions.",
+        disclaimer: "This is a rough market snapshot. Exact pricing depends on scope and site conditions.",
       },
-    };
-
-    return NextResponse.json(cleaned);
+    });
   } catch (err: any) {
     console.error(err);
     return NextResponse.json({ error: err?.message ?? "Bid detail failed." }, { status: 500 });

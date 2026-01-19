@@ -1,87 +1,55 @@
 // src/app/api/bid-market/route.ts
 import { NextResponse } from "next/server";
-
-import { openai, requireEnv } from "../../lib/openai";
+import { getOpenAI } from "../../lib/openai";
 
 export const runtime = "nodejs";
 
 function extractJson(text: string) {
-  // Try direct parse first
   try {
     return JSON.parse(text);
   } catch {}
-
-  // Fallback: pull first {...} block
   const start = text.indexOf("{");
   const end = text.lastIndexOf("}");
-  if (start === -1 || end === -1 || end <= start) {
-    throw new Error("Model did not return JSON.");
-  }
+  if (start === -1 || end === -1 || end <= start) throw new Error("No JSON object found.");
   return JSON.parse(text.slice(start, end + 1));
-}
-
-function safeStr(v: any, fallback = ""): string {
-  return typeof v === "string" ? v : fallback;
 }
 
 export async function POST(req: Request) {
   try {
-    requireEnv("OPENAI_API_KEY");
+    const openai = getOpenAI();
 
     const body = await req.json().catch(() => null);
-    const text = body?.text;
-    const notes = body?.notes;
-    const location = body?.location;
-    const projectType = body?.projectType;
+    const area = String(body?.area ?? "Troy, NY 12180").trim();
+    const projectType = String(body?.projectType ?? "").trim();
+    const approxSqft = String(body?.approxSqft ?? "").trim();
+    const finishLevel = String(body?.finishLevel ?? "unknown").trim();
 
-    if (!text || typeof text !== "string") {
-      return NextResponse.json({ error: "Missing bid text." }, { status: 400 });
-    }
-
-    const zip = safeStr(location?.zip, "12180");
-    const city = safeStr(location?.city, "Troy");
-    const state = safeStr(location?.state, "NY");
-    const project = safeStr(projectType, "general");
-
-    const prompt = `Return ONLY valid JSON (no markdown, no extra text) matching this exact shape:
+    const prompt = `
+Return ONLY valid JSON:
 
 {
+  "area": string,
   "expectedRange": { "low": string, "mid": string, "high": string },
-  "positioning": { "label": "low" | "in-range" | "high", "percent": number },
-  "confidence": "low" | "medium" | "high",
-  "assumptions": string[],
-  "bigDrivers": string[],
-  "missingInfo": string[],
-  "lineItemSanity": { "item": string, "expected": string, "notes": string }[]
+  "verdict": "below_typical" | "within_typical" | "above_typical" | "unknown",
+  "notes": string[],
+  "disclaimer": "This is a rough market snapshot. Exact pricing depends on scope and site conditions."
 }
 
-Context:
-- Location: ${city}, ${state} ${zip}
-- Project type: ${project}
-
 Rules:
-- expectedRange values like "$8,500–$11,000"
-- positioning.percent is positive if the bid is ABOVE expected mid, negative if BELOW; 0 if about equal.
-- Be conservative: if scope is unclear, set confidence="low" and list missingInfo.
-- Use plausible local contractor pricing logic:
-  - labor + materials + overhead/profit; explain assumptions.
-- Keep bullets short and practical.
-- lineItemSanity: include 3–8 items max (only if you can infer them from the bid; otherwise provide general buckets like "Labor", "Materials", "Demo/Disposal", "Permits", "Electrical", etc.)
-
-BID TEXT:
-${text}
-
-OPTIONAL JOB CONTEXT:
-${typeof notes === "string" ? notes : ""}`.trim();
+- If details are thin, set verdict="unknown".
+- Notes should mention what would tighten accuracy ("more input = tighter comparison").
+- Keep it practical and short.
+Inputs:
+- area: ${area}
+- projectType: ${projectType}
+- approxSqft: ${approxSqft}
+- finishLevel: ${finishLevel}
+`;
 
     const r = await openai.responses.create({
       model: "gpt-4o-mini",
       input: [
-        {
-          role: "system",
-          content:
-            "You are BuildGuide Market Rate Checker. Estimate plausible local price ranges based on scope and location. Be cautious. Output ONLY JSON.",
-        },
+        { role: "system", content: "You produce a rough local bid market snapshot. Output ONLY JSON." },
         { role: "user", content: prompt },
       ],
     });
@@ -89,23 +57,27 @@ ${typeof notes === "string" ? notes : ""}`.trim();
     const raw = r.output_text ?? "";
     const json = extractJson(raw);
 
-    // Light sanity checks (avoid runtime crashes on UI)
-    if (!json?.expectedRange?.low || !json?.expectedRange?.mid || !json?.expectedRange?.high) {
-      throw new Error("Invalid response: expectedRange missing.");
-    }
-    if (!json?.positioning?.label || typeof json?.positioning?.percent !== "number") {
-      throw new Error("Invalid response: positioning missing.");
-    }
-    if (!json?.confidence) {
-      throw new Error("Invalid response: confidence missing.");
-    }
+    const safeArr = (v: any) => (Array.isArray(v) ? v.filter(Boolean).map(String) : []);
+    const safeStr = (v: any, fb = "") => (typeof v === "string" ? v : fb);
 
-    return NextResponse.json(json);
+    return NextResponse.json({
+      area: safeStr(json?.area, area),
+      expectedRange: {
+        low: safeStr(json?.expectedRange?.low, "—"),
+        mid: safeStr(json?.expectedRange?.mid, "—"),
+        high: safeStr(json?.expectedRange?.high, "—"),
+      },
+      verdict:
+        json?.verdict === "below_typical" ||
+        json?.verdict === "within_typical" ||
+        json?.verdict === "above_typical"
+          ? json.verdict
+          : "unknown",
+      notes: safeArr(json?.notes),
+      disclaimer: "This is a rough market snapshot. Exact pricing depends on scope and site conditions.",
+    });
   } catch (err: any) {
     console.error(err);
-    return NextResponse.json(
-      { error: err?.message ?? "Market compare failed." },
-      { status: 500 }
-    );
+    return NextResponse.json({ error: err?.message ?? "Bid market failed." }, { status: 500 });
   }
 }

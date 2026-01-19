@@ -1,7 +1,6 @@
 // src/app/api/ask/route.ts
 import { NextResponse } from "next/server";
-
-import { openai, requireEnv } from "../../lib/openai";
+import { getOpenAI, requireEnv } from "../../lib/openai";
 import { AskResultSchema } from "../../lib/aiSchemas";
 
 export const runtime = "nodejs";
@@ -13,7 +12,7 @@ function extractJson(text: string) {
   const start = text.indexOf("{");
   const end = text.lastIndexOf("}");
   if (start === -1 || end === -1 || end <= start) {
-    throw new Error("Model did not return JSON.");
+    throw new Error("No JSON object found.");
   }
   return JSON.parse(text.slice(start, end + 1));
 }
@@ -23,20 +22,25 @@ export async function POST(req: Request) {
     requireEnv("OPENAI_API_KEY");
 
     const body = await req.json().catch(() => null);
-    const question = body?.question;
-    const context = body?.context ?? null;
+    const question = String(body?.question ?? "").trim();
+    const context = String(body?.context ?? "").trim();
 
-    if (!question || typeof question !== "string") {
+    if (!question) {
       return NextResponse.json({ error: "Missing question." }, { status: 400 });
     }
 
-    const prompt = `Return ONLY valid JSON (no markdown, no extra text):
-{ "answer": string }
+    const prompt = `
+Return ONLY valid JSON matching:
+{
+  "answer": string,
+  "followUps": string[],
+  "redFlags": string[]
+}
 
-Rules:
-- Be clear and practical.
-- If permits/code could apply, recommend verifying locally.
-`;
+Keep it practical, short, and cautious.
+`.trim();
+
+    const openai = getOpenAI();
 
     const r = await openai.responses.create({
       model: "gpt-4o-mini",
@@ -48,20 +52,21 @@ Rules:
             prompt +
             "\n\nQUESTION:\n" +
             question +
-            "\n\nCONTEXT (may be null):\n" +
-            JSON.stringify(context, null, 2),
+            (context ? "\n\nCONTEXT:\n" + context : ""),
         },
       ],
     });
 
     const raw = r.output_text ?? "";
     const json = extractJson(raw);
-
     const validated = AskResultSchema.parse(json);
 
     return NextResponse.json(validated);
   } catch (err: any) {
-    console.error(err);
-    return NextResponse.json({ error: err?.message ?? "Ask AI failed." }, { status: 500 });
+    console.error("ask route error:", err);
+    return NextResponse.json(
+      { error: err?.message ?? "Ask failed." },
+      { status: 500 }
+    );
   }
 }

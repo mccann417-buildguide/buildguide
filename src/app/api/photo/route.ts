@@ -2,27 +2,19 @@
 import { NextResponse } from "next/server";
 import { randomUUID } from "crypto";
 
-import { openai, requireEnv } from "../../lib/openai";
+import { getOpenAI, requireEnv } from "../../lib/openai";
 import { PhotoResultSchema } from "../../lib/aiSchemas";
 
 export const runtime = "nodejs";
-
-async function fileToDataUrl(file: File) {
-  const bytes = new Uint8Array(await file.arrayBuffer());
-  const base64 = Buffer.from(bytes).toString("base64");
-  const mime = file.type || "image/jpeg";
-  return `data:${mime};base64,${base64}`;
-}
 
 function extractJson(text: string) {
   try {
     return JSON.parse(text);
   } catch {}
-
   const start = text.indexOf("{");
   const end = text.lastIndexOf("}");
   if (start === -1 || end === -1 || end <= start) {
-    throw new Error("Model did not return JSON.");
+    throw new Error("No JSON object found.");
   }
   return JSON.parse(text.slice(start, end + 1));
 }
@@ -30,47 +22,50 @@ function extractJson(text: string) {
 export async function POST(req: Request) {
   try {
     requireEnv("OPENAI_API_KEY");
+    const openai = getOpenAI();
 
-    const form = await req.formData();
-    const image = form.get("image");
+    const body = await req.json().catch(() => null);
 
-    if (!image || !(image instanceof File)) {
-      return NextResponse.json({ error: "Missing image file (image)." }, { status: 400 });
+    const imageDataUrl = String(body?.imageDataUrl ?? "").trim();
+    const notes = typeof body?.notes === "string" ? body.notes.trim() : "";
+
+    if (!imageDataUrl) {
+      return NextResponse.json(
+        { error: "Missing imageDataUrl" },
+        { status: 400 }
+      );
     }
 
     const id = randomUUID();
-    const imageUrl = await fileToDataUrl(image);
 
-    const prompt = `Return ONLY valid JSON (no markdown, no extra text) that matches this shape exactly:
+    const prompt = `
+Return ONLY valid JSON matching:
 {
   "id": "${id}",
   "kind": "photo",
-  "identified": string,
-  "confidence": "low" | "medium" | "high",
-  "looksGood": string[],
-  "issues": string[],
+  "summary": string,
+  "redFlags": string[],
+  "suggestedFixes": string[],
   "typicalFixCost": { "minor": string, "moderate": string, "major": string },
-  "suggestedQuestions": string[]
+  "questionsToAsk": string[]
 }
-
 Rules:
-- Keep bullets short and practical.
-- If you cannot tell, set confidence="low" and add a question suggesting the next photo angle needed.
-- typicalFixCost values are strings like "$150–$400".
+- be cautious and practical
+- keep bullets short
+- typicalFixCost values like "$150–$400"
 `;
+
+    const userContext = notes ? `\n\nNOTES:\n${notes}\n` : "";
 
     const r = await openai.responses.create({
       model: "gpt-4o-mini",
       input: [
-        {
-          role: "system",
-          content: "You are BuildGuide Photo Check. Analyze construction photos. Be cautious and practical. Output ONLY JSON.",
-        },
+        { role: "system", content: "You are BuildGuide Photo Check. Output ONLY JSON." },
         {
           role: "user",
           content: [
-            { type: "input_text", text: prompt },
-            { type: "input_image", image_url: imageUrl, detail: "auto" },
+            { type: "input_text", text: prompt + userContext },
+            { type: "input_image", image_url: imageDataUrl, detail: "auto" },
           ],
         },
       ],
@@ -83,6 +78,9 @@ Rules:
     return NextResponse.json(validated);
   } catch (err: any) {
     console.error(err);
-    return NextResponse.json({ error: err?.message ?? "Photo AI failed." }, { status: 500 });
+    return NextResponse.json(
+      { error: err?.message ?? "Photo AI failed." },
+      { status: 500 }
+    );
   }
 }

@@ -1,8 +1,7 @@
 // src/app/api/bid/route.ts
 import { NextResponse } from "next/server";
 import { randomUUID } from "crypto";
-
-import { openai, requireEnv } from "../../lib/openai";
+import { getOpenAI } from "../../lib/openai";
 import { BidResultSchema } from "../../lib/aiSchemas";
 
 export const runtime = "nodejs";
@@ -19,7 +18,7 @@ function extractJson(text: string) {
 
 export async function POST(req: Request) {
   try {
-    requireEnv("OPENAI_API_KEY");
+    const openai = getOpenAI();
 
     const body = await req.json().catch(() => null);
     const bidText = body?.text;
@@ -51,15 +50,14 @@ Rules:
 - keep bullets short & specific
 `;
 
-    const userContext = notes ? `\n\nJOB CONTEXT (use this to improve accuracy):\n${notes}\n` : "";
+    const userContext = notes ? `\n\nJOB CONTEXT:\n${notes}\n` : "";
 
     const r = await openai.responses.create({
       model: "gpt-4o-mini",
       input: [
         {
           role: "system",
-          content:
-            "You are BuildGuide Bid Check. Be practical and cautious. Use job context if provided. Output ONLY JSON.",
+          content: "You are BuildGuide Bid Check. Be practical and cautious. Output ONLY JSON.",
         },
         {
           role: "user",
