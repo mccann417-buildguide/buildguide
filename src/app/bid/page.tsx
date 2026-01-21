@@ -100,113 +100,63 @@ function tryLoadFromHistory(resultId: string): BidAnalysisResult | null {
   }
 }
 
-function MarketComparisonCard({
-  locked,
-  isSubscriber,
-  detail,
+function FullReportCard({
   onUnlock,
-  onGenerate,
-  generating,
-  needsBidFirst,
+  hasResult,
+  teaserArea,
+  disabled,
 }: {
-  locked: boolean;
-  isSubscriber: boolean;
-  detail: BidDetailAI | null;
   onUnlock: () => void;
-  onGenerate: () => void;
-  generating: boolean;
-  needsBidFirst: boolean;
+  hasResult: boolean;
+  teaserArea: string;
+  disabled?: boolean;
 }) {
-  const mc = detail?.marketComparison;
-
   return (
     <div className="rounded-2xl border p-5">
       <div className="flex items-start justify-between gap-4">
         <div>
-          <div className="text-sm font-semibold">📊 Local Bid Comparison</div>
+          <div className="text-sm font-semibold">📊 Local Price Reality Check</div>
           <p className="mt-1 text-sm text-neutral-700">
-            Typical range for your area + what drives price.
-            {isSubscriber ? (
-              <span className="font-semibold"> Included with your plan</span>
-            ) : (
-              <span className="font-semibold"> Unlock for $2.99</span>
-            )}
-            .
+            Local pricing snapshot + deeper bid detail + PDF-ready summary.
           </p>
+          <div className="mt-1 text-xs text-neutral-600">
+            Area: <span className="font-semibold">{teaserArea}</span>
+          </div>
         </div>
 
-        {locked ? (
-          <button
-            onClick={onUnlock}
-            className="shrink-0 rounded-xl bg-black text-white px-4 py-2.5 text-sm font-medium hover:bg-black/90"
-          >
-            {isSubscriber ? "Included (Sign in)" : "Unlock $2.99"}
-          </button>
-        ) : mc ? (
-          <div className="shrink-0 rounded-xl border px-4 py-2.5 text-sm font-medium">✅ Unlocked</div>
-        ) : (
-          <button
-            onClick={onGenerate}
-            disabled={generating || needsBidFirst}
-            className="shrink-0 rounded-xl bg-black text-white px-4 py-2.5 text-sm font-medium disabled:opacity-50 hover:bg-black/90"
-            title={needsBidFirst ? "Run a bid check first" : ""}
-          >
-            {generating ? "Generating…" : "Generate Snapshot"}
-          </button>
-        )}
+        <button
+          onClick={onUnlock}
+          disabled={disabled}
+          className="shrink-0 rounded-xl bg-black text-white px-4 py-2.5 text-sm font-medium hover:bg-black/90 disabled:opacity-50"
+          title={!hasResult ? "Run Analyze Bid first so the unlock applies to that report" : ""}
+        >
+          Unlock Full Report $2.99
+        </button>
       </div>
 
-      {/* Always show the section (locked preview vs unlocked content) */}
-      {locked ? (
-        <div className="mt-4 rounded-2xl border bg-neutral-50 p-4">
-          <div className="text-sm font-semibold">Typical range (locked)</div>
-          <div className="mt-2 text-sm text-neutral-700">
-            Expected range: <span className="font-semibold">••••• · ••••• · •••••</span>
-          </div>
-          <div className="mt-1 text-sm text-neutral-700">
-            Verdict: <span className="font-semibold">••••••••••••</span>
-          </div>
+      <div className="mt-4 rounded-2xl border bg-neutral-50 p-4">
+        <div className="text-sm font-semibold">What you’ll get</div>
+        <ul className="mt-3 space-y-2 text-sm text-neutral-800">
+          {[
+            "Local pricing range for your area (low / typical / high)",
+            "Market context: permits / demo / finish level / access / timeline",
+            "Deeper scope gap detection + negotiation tips",
+            "Payment schedule red flags + contract warnings",
+            "PDF-ready summary you can download",
+          ].map((f) => (
+            <li key={f} className="flex gap-2">
+              <span className="mt-[2px]">🔒</span>
+              <span>{f}</span>
+            </li>
+          ))}
+        </ul>
+
+        {!hasResult ? (
           <div className="mt-3 text-xs text-neutral-600">
-            🔒 Unlock to see the local pricing range + what affects it (permits, demo, finish level, access, timeline).
+            Tip: Run <span className="font-semibold">Analyze Bid</span> first — then unlock applies to that specific report and can be saved.
           </div>
-          {needsBidFirst ? (
-            <div className="mt-2 text-xs text-neutral-600">Tip: Run a Bid Check first so the comparison can be accurate.</div>
-          ) : null}
-        </div>
-      ) : null}
-
-      {!locked && !mc ? (
-        <div className="mt-4 rounded-2xl border bg-neutral-50 p-4 text-sm text-neutral-800">
-          Click <span className="font-semibold">Generate Snapshot</span> to produce the local comparison from your bid + inputs.
-        </div>
-      ) : null}
-
-      {!locked && mc ? (
-        <div className="mt-4 rounded-2xl border p-4">
-          <div className="text-sm text-neutral-700">
-            <div className="font-medium">{mc.area}</div>
-            <div className="mt-1">
-              Expected range:{" "}
-              <span className="font-semibold">
-                {mc.expectedRange.low} · {mc.expectedRange.mid} · {mc.expectedRange.high}
-              </span>
-            </div>
-            <div className="mt-1">
-              Verdict: <span className="font-semibold">{verdictLabel(mc.verdict)}</span>
-            </div>
-          </div>
-
-          {mc.notes?.length ? (
-            <ul className="mt-3 list-disc pl-5 text-sm text-neutral-800 space-y-1">
-              {mc.notes.map((x) => (
-                <li key={x}>{x}</li>
-              ))}
-            </ul>
-          ) : null}
-
-          <div className="mt-3 text-xs text-neutral-600">{mc.disclaimer}</div>
-        </div>
-      ) : null}
+        ) : null}
+      </div>
     </div>
   );
 }
@@ -222,7 +172,12 @@ export default function BidPage() {
   const [detailLoading, setDetailLoading] = React.useState(false);
   const [detailError, setDetailError] = React.useState<string | null>(null);
 
-  // Comparison inputs (always visible after unlock)
+  const [unlockBusy, setUnlockBusy] = React.useState(false);
+  const [unlockToast, setUnlockToast] = React.useState<string | null>(null);
+
+  // ✅ This is the missing piece: the paid resultId from the URL
+  const [paidRid, setPaidRid] = React.useState<string | null>(null);
+
   const [compare, setCompare] = React.useState<CompareInputs>({
     area: "Troy, NY 12180",
     projectType: "",
@@ -235,29 +190,50 @@ export default function BidPage() {
     extraNotes: "",
   });
 
-  // If Stripe success redirects back with ?resultId=..., reload the report from History so page isn't blank.
+  // Stripe return handling + load report if it exists in history
   React.useEffect(() => {
-    try {
-      const sp = new URLSearchParams(window.location.search);
-      const rid = sp.get("resultId") ?? "";
-      if (!rid) return;
+    (async () => {
+      try {
+        const sp = new URLSearchParams(window.location.search);
+        const rid = sp.get("resultId") ?? "";
+        const sessionId = sp.get("session_id") ?? "";
 
-      // If we already have this result on screen, do nothing.
-      if (result?.id && String(result.id) === String(rid)) return;
+        if (rid) setPaidRid(rid);
 
-      const fromHistory = tryLoadFromHistory(rid);
-      if (fromHistory) {
-        setResult(fromHistory);
-        // Restore any existing unlock status
-        // (success page should have already set localStorage)
+        if (rid && sessionId) {
+          const v = await fetch("/api/stripe/verify", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ session_id: sessionId }),
+          });
+
+          const vdata = await v.json().catch(() => null);
+
+          if (v.ok && vdata?.ok && String(vdata?.resultId) === String(rid)) {
+            setAddonUnlocked(rid);
+            setUnlockToast("✅ Payment confirmed — Full Report unlocked.");
+          } else {
+            setUnlockToast("⚠️ Payment not confirmed yet. If you just paid, refresh once.");
+          }
+
+          const clean = new URL(window.location.href);
+          clean.searchParams.delete("session_id");
+          window.history.replaceState({}, "", clean.toString());
+        }
+
+        // If report exists in history, load it
+        if (rid && (!result || String(result.id) !== String(rid))) {
+          const fromHistory = tryLoadFromHistory(rid);
+          if (fromHistory) setResult(fromHistory);
+        }
+      } catch {
+        // ignore
       }
-    } catch {
-      // ignore
-    }
+    })();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  async function runBidAnalysis() {
+  async function runBidAnalysis(effectiveRid: string | null, unlocked: boolean) {
     setLoading(true);
     setError(null);
     setResult(null);
@@ -274,10 +250,27 @@ export default function BidPage() {
       const data = await res.json().catch(() => null);
       if (!res.ok) throw new Error(data?.error ?? "Bid analysis failed.");
 
-      setResult(data as BidAnalysisResult);
+      const next = data as BidAnalysisResult;
+      setResult(next);
 
       incrementUsage("bid");
-      saveToHistory(data as BidAnalysisResult);
+      saveToHistory(next);
+
+      // ✅ BIG UX FIX:
+      // If user already paid (unlock stored on URL rid), carry that unlock onto this newly created report id
+      if (unlocked && effectiveRid && isAddonUnlocked(effectiveRid) && !isAddonUnlocked(next.id)) {
+        setAddonUnlocked(next.id);
+      }
+
+      // Also update URL resultId to the newly created report so refresh works
+      try {
+        const u = new URL(window.location.href);
+        u.searchParams.set("resultId", String(next.id));
+        window.history.replaceState({}, "", u.toString());
+        setPaidRid(String(next.id));
+      } catch {
+        // ignore
+      }
     } catch (e: any) {
       setError(e?.message ?? "Something went wrong.");
     } finally {
@@ -290,7 +283,6 @@ export default function BidPage() {
 
     setDetailLoading(true);
     setDetailError(null);
-    setDetail(null);
 
     try {
       const payload = {
@@ -327,18 +319,14 @@ export default function BidPage() {
     }
   }
 
-  async function startStripeUnlock() {
-    if (!result?.id) {
-      alert("Run a Bid Check first so we can unlock that specific report.");
-      return;
-    }
-
+  async function startStripeUnlock(targetResultId: string) {
+    setUnlockBusy(true);
     try {
       const res = await fetch("/api/stripe/checkout", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          resultId: result.id,
+          resultId: targetResultId,
           area: compare.area,
         }),
       });
@@ -354,6 +342,8 @@ export default function BidPage() {
       throw new Error("Missing Stripe checkout URL.");
     } catch (e: any) {
       alert(e?.message ?? "Stripe checkout failed.");
+    } finally {
+      setUnlockBusy(false);
     }
   }
 
@@ -365,10 +355,17 @@ export default function BidPage() {
     <FeatureGate kind="bid">
       {({ allowed, openPaywall, remaining, planId }) => {
         const isSubscriber = planId !== "free";
-        const paidByAddon = result?.id ? isAddonUnlocked(result.id) : false;
 
-        // Locked if not subscriber and not addon unlocked
-        const locked = !isSubscriber && !paidByAddon;
+        // ✅ Use URL resultId when no result is loaded yet
+        const effectiveRid = result?.id ?? paidRid;
+
+        const paidByAddon = effectiveRid ? isAddonUnlocked(String(effectiveRid)) : false;
+        const unlocked = isSubscriber || paidByAddon;
+
+        // ✅ Allow Analyze if unlocked (even if remaining=0)
+        const canAnalyze = allowed || unlocked;
+
+        const teaserArea = compare.area || "Your area";
 
         return (
           <main className="mx-auto max-w-4xl px-6 py-14 space-y-6">
@@ -394,13 +391,16 @@ export default function BidPage() {
               </div>
             </div>
 
+            {unlockToast ? (
+              <div className="rounded-2xl border bg-neutral-50 p-4 text-sm text-neutral-800">{unlockToast}</div>
+            ) : null}
+
             <TestimonialCard
               name="Courtney S."
               role="Homeowner"
               quote="BuildGuide helped me ask all the right questions — and I trusted my contractor more after I ran the bid through Bid Check."
             />
 
-            {/* 1) Paste + run */}
             <div className="rounded-2xl border p-5 space-y-4">
               <div className="text-sm font-semibold">1) Paste your bid</div>
 
@@ -425,10 +425,38 @@ export default function BidPage() {
                 />
               </div>
 
+              <div className="rounded-2xl border p-4">
+                <div className="text-sm font-semibold">📍 Your area (used for local comparison)</div>
+                <p className="mt-1 text-xs text-neutral-600">Example: “Troy, NY 12180” or “90210”.</p>
+                <input
+                  value={compare.area}
+                  onChange={(e) => setCompare((p) => ({ ...p, area: e.target.value }))}
+                  className="mt-3 w-full rounded-xl border px-3 py-2 text-sm"
+                  placeholder="Troy, NY 12180"
+                />
+              </div>
+
+              {/* Only show upsell if not unlocked */}
+              {!unlocked ? (
+                <FullReportCard
+                  hasResult={!!result}
+                  teaserArea={teaserArea}
+                  disabled={!result || unlockBusy}
+                  onUnlock={() => {
+                    if (!result?.id) return;
+                    return startStripeUnlock(String(result.id));
+                  }}
+                />
+              ) : (
+                <div className="rounded-2xl border bg-neutral-50 p-4 text-sm text-neutral-800">
+                  ✅ Full Report unlocked for this bid.
+                </div>
+              )}
+
               <button
                 onClick={() => {
-                  if (!allowed) return openPaywall();
-                  return runBidAnalysis();
+                  if (!canAnalyze) return openPaywall();
+                  return runBidAnalysis(effectiveRid ? String(effectiveRid) : null, unlocked);
                 }}
                 disabled={!text.trim() || loading}
                 className="rounded-xl bg-black text-white px-5 py-3 text-sm font-medium disabled:opacity-50 hover:bg-black/90"
@@ -436,7 +464,7 @@ export default function BidPage() {
                 {loading ? "Analyzing..." : "Analyze Bid"}
               </button>
 
-              {!allowed ? (
+              {!canAnalyze ? (
                 <div className="text-sm text-neutral-700">
                   You’ve used your free bid check.{" "}
                   <button className="underline" onClick={openPaywall}>
@@ -444,301 +472,77 @@ export default function BidPage() {
                   </button>
                   .
                 </div>
+              ) : !allowed && unlocked ? (
+                <div className="text-sm text-neutral-700">
+                  ✅ Full Report unlocked — you can analyze this bid even though free checks are used up.
+                </div>
               ) : null}
 
               {error ? <div className="text-sm text-red-600">{error}</div> : null}
             </div>
 
-            {/* Results */}
             {result ? (
               <div className="space-y-4">
                 <ResultSection title="📄 What’s Included" icon="📄" items={result.included} />
                 <ResultSection title="⚠️ What’s Missing" icon="⚠️" items={result.missing} />
                 <ResultSection title="🚩 Red Flags" icon="🚩" items={result.redFlags} />
 
-                {/* Always-visible Local Comparison (locked/unlocked) */}
-                <MarketComparisonCard
-                  locked={locked}
-                  isSubscriber={isSubscriber}
-                  detail={detail}
-                  generating={detailLoading}
-                  needsBidFirst={!result}
-                  onUnlock={async () => {
-                    // If subscriber but FeatureGate is "free", send them to plan/paywall
-                    if (isSubscriber) return;
+                {/* Full report section (unlocked only) */}
+                {unlocked ? (
+                  <div className="rounded-2xl border p-5">
+                    <div className="flex items-start justify-between gap-4">
+                      <div>
+                        <div className="text-sm font-semibold">Full Report</div>
+                        <p className="mt-1 text-sm text-neutral-700">
+                          Local range, deeper analysis, negotiation tips, and a PDF-ready summary.
+                        </p>
+                      </div>
 
-                    // Start Stripe checkout for this report
-                    await startStripeUnlock();
-                  }}
-                  onGenerate={async () => {
-                    // If locked, do nothing (button already disabled/hidden)
-                    if (locked) return;
-                    await generateDetailAI();
-                  }}
-                />
-
-                {/* Paid content (comparison inputs + deeper detail) */}
-                <div className="rounded-2xl border p-5">
-                  <div className="flex items-start justify-between gap-4">
-                    <div>
-                      <div className="text-sm font-semibold">Detailed Report</div>
-                      <p className="mt-1 text-sm text-neutral-700">
-                        Deeper detail, negotiation tips, and the local pricing snapshot.
-                        {!isSubscriber ? <span className="font-semibold"> One-time $2.99</span> : null}
-                        {isSubscriber ? <span className="font-semibold"> Included with your plan</span> : null}
-                        .
-                      </p>
+                      <button
+                        onClick={generateDetailAI}
+                        disabled={detailLoading}
+                        className="rounded-xl bg-black text-white px-4 py-2.5 text-sm font-medium disabled:opacity-50 hover:bg-black/90"
+                      >
+                        {detailLoading ? "Generating…" : detail ? "Regenerate (AI)" : "Generate (AI)"}
+                      </button>
                     </div>
 
-                    {locked ? (
-                      <button
-                        onClick={startStripeUnlock}
-                        className="shrink-0 rounded-xl bg-black text-white px-4 py-2.5 text-sm font-medium hover:bg-black/90"
-                      >
-                        Unlock $2.99
-                      </button>
+                    {detailError ? <div className="mt-3 text-sm text-red-600">{detailError}</div> : null}
+
+                    {detail?.marketComparison ? (
+                      <div className="mt-4 rounded-2xl border p-4">
+                        <div className="text-sm font-semibold">📍 Market Snapshot</div>
+                        <div className="mt-2 text-sm text-neutral-700">
+                          <div className="font-medium">{detail.marketComparison.area}</div>
+                          <div className="mt-1">
+                            Expected range:{" "}
+                            <span className="font-semibold">
+                              {detail.marketComparison.expectedRange.low} · {detail.marketComparison.expectedRange.mid} ·{" "}
+                              {detail.marketComparison.expectedRange.high}
+                            </span>
+                          </div>
+                          <div className="mt-1">
+                            Verdict: <span className="font-semibold">{verdictLabel(detail.marketComparison.verdict)}</span>
+                          </div>
+                        </div>
+                      </div>
+                    ) : null}
+
+                    {detail ? (
+                      <div className="mt-4 text-sm text-neutral-700">
+                        ✅ Full report generated. Next step is adding the PDF download button.
+                      </div>
                     ) : (
-                      <div className="shrink-0 rounded-xl border px-4 py-2.5 text-sm font-medium">✅ Unlocked</div>
+                      <div className="mt-4 text-sm text-neutral-700">
+                        Click <span className="font-semibold">Generate (AI)</span> to produce the full report.
+                      </div>
                     )}
                   </div>
-
-                  {locked ? (
-                    <div className="mt-4 rounded-2xl border bg-neutral-50 p-4">
-                      <div className="text-sm font-semibold">What you’ll unlock</div>
-                      <ul className="mt-3 space-y-2 text-sm text-neutral-800">
-                        {[
-                          "Local pricing range for your area",
-                          "Market context: permits / demo / finish level / access",
-                          "Deeper scope gap detection",
-                          "Payment schedule red flags",
-                          "Negotiation tips",
-                        ].map((f) => (
-                          <li key={f} className="flex gap-2">
-                            <span className="mt-[2px]">🔒</span>
-                            <span>{f}</span>
-                          </li>
-                        ))}
-                      </ul>
-                      <div className="mt-3 text-xs text-neutral-600">
-                        After payment, this report unlocks for this specific bid (saved in History).
-                      </div>
-                    </div>
-                  ) : (
-                    <div className="mt-4 space-y-3">
-                      {/* Inputs */}
-                      <div className="rounded-2xl border p-4">
-                        <div className="font-semibold">📍 Market Comparison Inputs</div>
-                        <p className="mt-1 text-sm text-neutral-700">
-                          The more input you give, the tighter the local comparison gets.
-                        </p>
-
-                        <div className="mt-4 grid md:grid-cols-2 gap-3">
-                          <div>
-                            <label className="text-xs text-neutral-600">Area</label>
-                            <input
-                              value={compare.area}
-                              onChange={(e) => setCompare((p) => ({ ...p, area: e.target.value }))}
-                              className="mt-1 w-full rounded-xl border px-3 py-2 text-sm"
-                              placeholder="Troy, NY 12180"
-                            />
-                          </div>
-
-                          <div>
-                            <label className="text-xs text-neutral-600">Project type</label>
-                            <input
-                              value={compare.projectType}
-                              onChange={(e) => setCompare((p) => ({ ...p, projectType: e.target.value }))}
-                              className="mt-1 w-full rounded-xl border px-3 py-2 text-sm"
-                              placeholder="Kitchen remodel, roof, deck, bathroom..."
-                            />
-                          </div>
-
-                          <div>
-                            <label className="text-xs text-neutral-600">Approx sqft / size</label>
-                            <input
-                              value={compare.approxSqft}
-                              onChange={(e) => setCompare((p) => ({ ...p, approxSqft: e.target.value }))}
-                              className="mt-1 w-full rounded-xl border px-3 py-2 text-sm"
-                              placeholder="e.g. 180 sq ft, 1200 sq ft, 2 bathrooms..."
-                            />
-                          </div>
-
-                          <div>
-                            <label className="text-xs text-neutral-600">Finish level</label>
-                            <select
-                              value={compare.finishLevel}
-                              onChange={(e) =>
-                                setCompare((p) => ({
-                                  ...p,
-                                  finishLevel: e.target.value as CompareInputs["finishLevel"],
-                                }))
-                              }
-                              className="mt-1 w-full rounded-xl border px-3 py-2 text-sm"
-                            >
-                              <option value="unknown">Unknown</option>
-                              <option value="budget">Budget</option>
-                              <option value="mid">Mid-grade</option>
-                              <option value="high">High-end</option>
-                            </select>
-                          </div>
-
-                          <div>
-                            <label className="text-xs text-neutral-600">Permits included?</label>
-                            <select
-                              value={compare.permits}
-                              onChange={(e) =>
-                                setCompare((p) => ({
-                                  ...p,
-                                  permits: e.target.value as CompareInputs["permits"],
-                                }))
-                              }
-                              className="mt-1 w-full rounded-xl border px-3 py-2 text-sm"
-                            >
-                              <option value="unknown">Unknown</option>
-                              <option value="yes">Yes</option>
-                              <option value="no">No</option>
-                            </select>
-                          </div>
-
-                          <div>
-                            <label className="text-xs text-neutral-600">Demo included?</label>
-                            <select
-                              value={compare.includesDemo}
-                              onChange={(e) =>
-                                setCompare((p) => ({
-                                  ...p,
-                                  includesDemo: e.target.value as CompareInputs["includesDemo"],
-                                }))
-                              }
-                              className="mt-1 w-full rounded-xl border px-3 py-2 text-sm"
-                            >
-                              <option value="unknown">Unknown</option>
-                              <option value="yes">Yes</option>
-                              <option value="no">No</option>
-                            </select>
-                          </div>
-
-                          <div>
-                            <label className="text-xs text-neutral-600">Timeline</label>
-                            <input
-                              value={compare.timeline}
-                              onChange={(e) => setCompare((p) => ({ ...p, timeline: e.target.value }))}
-                              className="mt-1 w-full rounded-xl border px-3 py-2 text-sm"
-                              placeholder="ASAP, 2 weeks, spring, nights/weekends..."
-                            />
-                          </div>
-
-                          <div>
-                            <label className="text-xs text-neutral-600">Access / constraints</label>
-                            <input
-                              value={compare.accessNotes}
-                              onChange={(e) => setCompare((p) => ({ ...p, accessNotes: e.target.value }))}
-                              className="mt-1 w-full rounded-xl border px-3 py-2 text-sm"
-                              placeholder="Occupied, stairs only, tight parking, etc."
-                            />
-                          </div>
-                        </div>
-
-                        <div className="mt-3">
-                          <label className="text-xs text-neutral-600">Extra notes</label>
-                          <textarea
-                            value={compare.extraNotes}
-                            onChange={(e) => setCompare((p) => ({ ...p, extraNotes: e.target.value }))}
-                            className="mt-1 w-full min-h-[90px] rounded-2xl border p-3 text-sm"
-                            placeholder='Anything that affects price: premium materials, structural work, surprises, etc.'
-                          />
-                        </div>
-
-                        <div className="mt-4 flex items-center justify-between gap-3">
-                          <div className="text-xs text-neutral-600">
-                            Tip: More scope detail = tighter pricing range.
-                          </div>
-
-                          <button
-                            onClick={generateDetailAI}
-                            disabled={detailLoading}
-                            className="rounded-xl bg-black text-white px-4 py-2 text-sm font-medium disabled:opacity-50 hover:bg-black/90"
-                          >
-                            {detailLoading ? "Generating…" : detail ? "Regenerate (AI)" : "Generate Detailed Report (AI)"}
-                          </button>
-                        </div>
-
-                        {detailError ? <div className="mt-3 text-sm text-red-600">{detailError}</div> : null}
-                      </div>
-
-                      {/* Detail outputs */}
-                      {detail ? (
-                        <div className="rounded-2xl border p-4">
-                          <div className="font-semibold">📌 Deeper Detail (AI)</div>
-
-                          <div className="mt-4 space-y-4">
-                            <div>
-                              <div className="text-sm font-semibold">Deeper issues</div>
-                              <ul className="mt-2 list-disc pl-5 text-sm space-y-1">
-                                {detail.deeperIssues.map((x) => (
-                                  <li key={x}>{x}</li>
-                                ))}
-                              </ul>
-                            </div>
-
-                            <div>
-                              <div className="text-sm font-semibold">Payment schedule notes</div>
-                              <ul className="mt-2 list-disc pl-5 text-sm space-y-1">
-                                {detail.paymentScheduleNotes.map((x) => (
-                                  <li key={x}>{x}</li>
-                                ))}
-                              </ul>
-                            </div>
-
-                            <div>
-                              <div className="text-sm font-semibold">Contract warnings</div>
-                              <ul className="mt-2 list-disc pl-5 text-sm space-y-1">
-                                {detail.contractWarnings.map((x) => (
-                                  <li key={x}>{x}</li>
-                                ))}
-                              </ul>
-                            </div>
-
-                            <div>
-                              <div className="text-sm font-semibold">Negotiation tips</div>
-                              <ul className="mt-2 list-disc pl-5 text-sm space-y-1">
-                                {detail.negotiationTips.map((x) => (
-                                  <li key={x}>{x}</li>
-                                ))}
-                              </ul>
-                            </div>
-
-                            <div className="rounded-xl border p-3 bg-neutral-50">
-                              <div className="text-sm font-semibold">PDF summary</div>
-                              <div className="mt-2 text-sm whitespace-pre-wrap">{detail.pdfSummary}</div>
-                            </div>
-                          </div>
-                        </div>
-                      ) : (
-                        <div className="text-sm text-neutral-700">
-                          Click <span className="font-semibold">Generate Detailed Report (AI)</span> to produce the local snapshot + deeper analysis.
-                        </div>
-                      )}
-                    </div>
-                  )}
-                </div>
+                ) : null}
 
                 <SuggestedQuestions questions={result.questionsToAsk} onPick={goAsk} />
               </div>
-            ) : (
-              // No result yet: still show the local comparison card (locked preview)
-              <MarketComparisonCard
-                locked={true}
-                isSubscriber={planId !== "free"}
-                detail={null}
-                generating={false}
-                needsBidFirst={true}
-                onUnlock={() => {
-                  alert("Run a Bid Check first so we can unlock that specific report.");
-                }}
-                onGenerate={() => {}}
-              />
-            )}
+            ) : null}
           </main>
         );
       }}
