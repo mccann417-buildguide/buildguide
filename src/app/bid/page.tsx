@@ -29,14 +29,6 @@ type BidDetailAI = {
   marketComparison?: MarketComparison;
 };
 
-// ✅ Added (fixes your red squiggles)
-type GateState = {
-  allowed: boolean;
-  remaining: number;
-  planId: string;
-  openPaywall: () => void;
-};
-
 type CompareInputs = {
   area: string;
   projectType: string;
@@ -54,22 +46,20 @@ const HISTORY_KEY = "buildguide_history";
 function addonKey(resultId: string) {
   return `buildguide_bid_addon_unlocked_${resultId}`;
 }
-
 function isAddonUnlocked(resultId: string): boolean {
   if (typeof window === "undefined") return false;
   return window.localStorage.getItem(addonKey(resultId)) === "1";
 }
-
 function setAddonUnlocked(resultId: string) {
   if (typeof window === "undefined") return;
   window.localStorage.setItem(addonKey(resultId), "1");
 }
 
-function verdictLabel(v: MarketComparison["verdict"]) {
-  if (v === "below_typical") return "Likely below typical";
-  if (v === "within_typical") return "Likely within typical";
-  if (v === "above_typical") return "Likely above typical";
-  return "Unknown / needs more detail";
+function baseKey(resultId: string) {
+  return `buildguide_bid_base_${resultId}`;
+}
+function detailKey(resultId: string) {
+  return `buildguide_bid_detail_${resultId}`;
 }
 
 function trySaveDetailToHistory(baseId: string, detail: BidDetailAI) {
@@ -106,6 +96,49 @@ function tryLoadFromHistory(resultId: string): BidAnalysisResult | null {
   } catch {
     return null;
   }
+}
+
+function tryLoadBaseFromLocal(resultId: string): BidAnalysisResult | null {
+  try {
+    const raw = localStorage.getItem(baseKey(resultId));
+    if (!raw) return null;
+    return JSON.parse(raw) as BidAnalysisResult;
+  } catch {
+    return null;
+  }
+}
+
+function trySaveBaseToLocal(base: BidAnalysisResult) {
+  try {
+    localStorage.setItem(baseKey(base.id), JSON.stringify(base));
+  } catch {
+    // ignore
+  }
+}
+
+function tryLoadDetailFromLocal(resultId: string): BidDetailAI | null {
+  try {
+    const raw = localStorage.getItem(detailKey(resultId));
+    if (!raw) return null;
+    return JSON.parse(raw) as BidDetailAI;
+  } catch {
+    return null;
+  }
+}
+
+function trySaveDetailToLocal(resultId: string, detail: BidDetailAI) {
+  try {
+    localStorage.setItem(detailKey(resultId), JSON.stringify(detail));
+  } catch {
+    // ignore
+  }
+}
+
+function verdictLabel(v: MarketComparison["verdict"]) {
+  if (v === "below_typical") return "Likely below typical";
+  if (v === "within_typical") return "Likely within typical";
+  if (v === "above_typical") return "Likely above typical";
+  return "Unknown / needs more detail";
 }
 
 function FullReportCard({
@@ -161,8 +194,7 @@ function FullReportCard({
 
         {!hasResult ? (
           <div className="mt-3 text-xs text-neutral-600">
-            Tip: Run <span className="font-semibold">Analyze Bid</span> first — then unlock applies to that specific report
-            and can be saved.
+            Tip: Run <span className="font-semibold">Analyze Bid</span> first — then unlock applies to that specific report and can be saved.
           </div>
         ) : null}
       </div>
@@ -171,8 +203,6 @@ function FullReportCard({
 }
 
 export default function BidPage() {
-  // ✅ Added (fixes your red squiggles)
-
   const [text, setText] = React.useState("");
   const [notes, setNotes] = React.useState("");
   const [loading, setLoading] = React.useState(false);
@@ -186,7 +216,7 @@ export default function BidPage() {
   const [unlockBusy, setUnlockBusy] = React.useState(false);
   const [unlockToast, setUnlockToast] = React.useState<string | null>(null);
 
-  // ✅ paid resultId from URL
+  // paid resultId from URL
   const [paidRid, setPaidRid] = React.useState<string | null>(null);
 
   const [compare, setCompare] = React.useState<CompareInputs>({
@@ -201,7 +231,53 @@ export default function BidPage() {
     extraNotes: "",
   });
 
-  // Stripe return handling + load report if it exists in history
+  // ✅ Generate detail (can be auto-run)
+  async function generateDetailAI(baseOverride?: BidAnalysisResult, opts?: { quiet?: boolean }) {
+    const base = baseOverride ?? result;
+    if (!base) return;
+
+    if (!opts?.quiet) {
+      setDetailLoading(true);
+      setDetailError(null);
+    }
+
+    try {
+      const payload = {
+        base,
+        context: {
+          area: compare.area,
+          projectType: compare.projectType || undefined,
+          approxSqft: compare.approxSqft || undefined,
+          finishLevel: compare.finishLevel,
+          permits: compare.permits,
+          includesDemo: compare.includesDemo,
+          timeline: compare.timeline || undefined,
+          accessNotes: compare.accessNotes || undefined,
+          extraNotes: compare.extraNotes || undefined,
+          jobNotes: notes.trim() || undefined,
+        },
+      };
+
+      const res = await fetch("/api/bid-detail", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      });
+
+      const data = await res.json().catch(() => null);
+      if (!res.ok) throw new Error(data?.error ?? "Detailed report failed.");
+
+      setDetail(data as BidDetailAI);
+      trySaveDetailToHistory(base.id, data as BidDetailAI);
+      trySaveDetailToLocal(base.id, data as BidDetailAI);
+    } catch (e: any) {
+      if (!opts?.quiet) setDetailError(e?.message ?? "Something went wrong generating detail.");
+    } finally {
+      if (!opts?.quiet) setDetailLoading(false);
+    }
+  }
+
+  // Stripe return handling + load report + AUTO generate detail after payment
   React.useEffect(() => {
     (async () => {
       try {
@@ -210,6 +286,15 @@ export default function BidPage() {
         const sessionId = sp.get("session_id") ?? "";
 
         if (rid) setPaidRid(rid);
+
+        // If detail already saved, load it fast
+        if (rid) {
+          const existingDetail = tryLoadDetailFromLocal(rid);
+          if (existingDetail) setDetail(existingDetail);
+
+          const existingBase = tryLoadBaseFromLocal(rid) || tryLoadFromHistory(rid);
+          if (existingBase) setResult(existingBase);
+        }
 
         if (rid && sessionId) {
           const v = await fetch("/api/stripe/verify", {
@@ -224,21 +309,28 @@ export default function BidPage() {
             setAddonUnlocked(rid);
             setUnlockToast("✅ Payment confirmed — Full Report unlocked.");
 
-            // ✅ MVP UX: if they paid, auto-generate the full report as long as we have a base result
-            // We'll trigger generation later once result is loaded from history.
+            // ✅ Load base, then auto-generate detail if not already present
+            const base = tryLoadBaseFromLocal(rid) || tryLoadFromHistory(rid);
+
+            if (base) {
+              setResult(base);
+
+              const existingDetail = tryLoadDetailFromLocal(rid);
+              if (!existingDetail) {
+                // auto-run silently so user lands into the upgraded content
+                await generateDetailAI(base, { quiet: true });
+              }
+            } else {
+              setUnlockToast("✅ Payment confirmed — now run Analyze Bid to generate your full report.");
+            }
           } else {
             setUnlockToast("⚠️ Payment not confirmed yet. If you just paid, refresh once.");
           }
 
+          // clean URL
           const clean = new URL(window.location.href);
           clean.searchParams.delete("session_id");
           window.history.replaceState({}, "", clean.toString());
-        }
-
-        // If report exists in history, load it
-        if (rid && (!result || String(result.id) !== String(rid))) {
-          const fromHistory = tryLoadFromHistory(rid);
-          if (fromHistory) setResult(fromHistory);
         }
       } catch {
         // ignore
@@ -269,13 +361,14 @@ export default function BidPage() {
 
       incrementUsage("bid");
       saveToHistory(next);
+      trySaveBaseToLocal(next);
 
-      // ✅ If user already paid (unlock stored on URL rid), carry that unlock onto this newly created report id
+      // ✅ If user already paid for a prior rid, carry unlock onto new report id
       if (unlocked && effectiveRid && isAddonUnlocked(effectiveRid) && !isAddonUnlocked(next.id)) {
         setAddonUnlocked(next.id);
       }
 
-      // Update URL resultId to the newly created report so refresh works
+      // Update URL to new report id so refresh works
       try {
         const u = new URL(window.location.href);
         u.searchParams.set("resultId", String(next.id));
@@ -284,52 +377,16 @@ export default function BidPage() {
       } catch {
         // ignore
       }
+
+      // ✅ MVP: if already unlocked, auto-generate the detail immediately after analyze
+      const finalRid = String(next.id);
+      if (isAddonUnlocked(finalRid)) {
+        await generateDetailAI(next, { quiet: true });
+      }
     } catch (e: any) {
       setError(e?.message ?? "Something went wrong.");
     } finally {
       setLoading(false);
-    }
-  }
-
-  async function generateDetailAI(baseOverride?: BidAnalysisResult | null) {
-    const baseToUse = baseOverride ?? result;
-    if (!baseToUse) return;
-
-    setDetailLoading(true);
-    setDetailError(null);
-
-    try {
-      const payload = {
-        base: baseToUse,
-        context: {
-          area: compare.area,
-          projectType: compare.projectType || undefined,
-          approxSqft: compare.approxSqft || undefined,
-          finishLevel: compare.finishLevel,
-          permits: compare.permits,
-          includesDemo: compare.includesDemo,
-          timeline: compare.timeline || undefined,
-          accessNotes: compare.accessNotes || undefined,
-          extraNotes: compare.extraNotes || undefined,
-          jobNotes: notes.trim() || undefined,
-        },
-      };
-
-      const res = await fetch("/api/bid-detail", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(payload),
-      });
-
-      const data = await res.json().catch(() => null);
-      if (!res.ok) throw new Error(data?.error ?? "Detailed report failed.");
-
-      setDetail(data as BidDetailAI);
-      trySaveDetailToHistory(baseToUse.id, data as BidDetailAI);
-    } catch (e: any) {
-      setDetailError(e?.message ?? "Something went wrong generating detail.");
-    } finally {
-      setDetailLoading(false);
     }
   }
 
@@ -368,15 +425,13 @@ export default function BidPage() {
   return (
     <FeatureGate kind="bid">
       {({ allowed, openPaywall, remaining, planId }) => {
-        // store gate info (optional, but keeps types happy if you want to use gate later)
-
         const isSubscriber = planId !== "free";
-        const effectiveRid = result?.id ?? paidRid;
 
+        const effectiveRid = result?.id ?? paidRid;
         const paidByAddon = effectiveRid ? isAddonUnlocked(String(effectiveRid)) : false;
         const unlocked = isSubscriber || paidByAddon;
 
-        // Allow Analyze if unlocked (even if remaining=0)
+        // Allow Analyze if unlocked even when free remaining=0
         const canAnalyze = allowed || unlocked;
 
         const teaserArea = compare.area || "Your area";
@@ -450,7 +505,6 @@ export default function BidPage() {
                 />
               </div>
 
-              {/* Only show upsell if not unlocked */}
               {!unlocked ? (
                 <FullReportCard
                   hasResult={!!result}
@@ -501,7 +555,6 @@ export default function BidPage() {
                 <ResultSection title="⚠️ What’s Missing" icon="⚠️" items={result.missing} />
                 <ResultSection title="🚩 Red Flags" icon="🚩" items={result.redFlags} />
 
-                {/* Full report section (unlocked only) */}
                 {unlocked ? (
                   <div className="rounded-2xl border p-5">
                     <div className="flex items-start justify-between gap-4">
@@ -513,7 +566,7 @@ export default function BidPage() {
                       </div>
 
                       <button
-                        onClick={() => generateDetailAI()}
+                        onClick={() => generateDetailAI(undefined)}
                         disabled={detailLoading}
                         className="rounded-xl bg-black text-white px-4 py-2.5 text-sm font-medium disabled:opacity-50 hover:bg-black/90"
                       >
@@ -523,9 +576,10 @@ export default function BidPage() {
 
                     {detailError ? <div className="mt-3 text-sm text-red-600">{detailError}</div> : null}
 
+                    {/* ✅ SHOW BID COMPARISON FIRST */}
                     {detail?.marketComparison ? (
                       <div className="mt-4 rounded-2xl border p-4">
-                        <div className="text-sm font-semibold">📍 Market Snapshot</div>
+                        <div className="text-sm font-semibold">📍 Market Snapshot (Bid Comparison)</div>
                         <div className="mt-2 text-sm text-neutral-700">
                           <div className="font-medium">{detail.marketComparison.area}</div>
                           <div className="mt-1">
@@ -538,17 +592,46 @@ export default function BidPage() {
                           <div className="mt-1">
                             Verdict: <span className="font-semibold">{verdictLabel(detail.marketComparison.verdict)}</span>
                           </div>
+                          {detail.marketComparison.notes?.length ? (
+                            <ul className="mt-3 list-disc pl-5 text-sm">
+                              {detail.marketComparison.notes.map((n, i) => (
+                                <li key={i}>{n}</li>
+                              ))}
+                            </ul>
+                          ) : null}
+                          <div className="mt-3 text-xs text-neutral-500">{detail.marketComparison.disclaimer}</div>
                         </div>
                       </div>
-                    ) : null}
+                    ) : (
+                      <div className="mt-4 rounded-2xl border bg-neutral-50 p-4 text-sm text-neutral-700">
+                        {detail ? "Market snapshot unavailable." : "Generating market snapshot…"}
+                      </div>
+                    )}
 
+                    {/* ✅ THEN DEEPER AI AUTOMATICALLY (if detail exists) */}
                     {detail ? (
-                      <div className="mt-4 text-sm text-neutral-700">
-                        ✅ Full report generated. Next step is adding the PDF download button.
+                      <div className="mt-4 space-y-4">
+                        <ResultSection title="📌 Deeper Issues" icon="📌" items={detail.deeperIssues} />
+                        <ResultSection title="💳 Payment Schedule Notes" icon="💳" items={detail.paymentScheduleNotes} />
+                        <ResultSection title="🧾 Contract Warnings" icon="🧾" items={detail.contractWarnings} />
+                        <ResultSection title="🤝 Negotiation Tips" icon="🤝" items={detail.negotiationTips} />
+
+                        <div className="rounded-2xl border p-4">
+                          <div className="text-sm font-semibold">📝 PDF-ready Summary</div>
+                          <pre className="mt-2 whitespace-pre-wrap text-sm text-neutral-800">{detail.pdfSummary}</pre>
+                        </div>
+
+                        {/* MVP placeholder for PDF */}
+                        <button
+                          className="rounded-xl border px-4 py-2 text-sm font-medium hover:bg-neutral-50"
+                          onClick={() => alert("Next step: add /api/bid-pdf route + download button")}
+                        >
+                          Download Printable PDF (next)
+                        </button>
                       </div>
                     ) : (
                       <div className="mt-4 text-sm text-neutral-700">
-                        Click <span className="font-semibold">Generate (AI)</span> to produce the full report.
+                        Full report is generating… if this takes too long, click <span className="font-semibold">Generate (AI)</span>.
                       </div>
                     )}
                   </div>
