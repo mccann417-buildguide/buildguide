@@ -13,13 +13,11 @@ function requireEnv(name: string): string {
 export async function POST(req: Request) {
   try {
     const STRIPE_SECRET_KEY = requireEnv("STRIPE_SECRET_KEY");
-
-    // ✅ IMPORTANT: don't pass apiVersion (prevents TS mismatch squiggles)
     const stripe = new Stripe(STRIPE_SECRET_KEY);
 
     const body = await req.json().catch(() => ({}));
 
-    // ✅ Accept both names
+    // Accept both names
     const sessionId = String(body?.session_id ?? body?.sessionId ?? "").trim();
 
     if (!sessionId) {
@@ -30,18 +28,17 @@ export async function POST(req: Request) {
 
     const paid = session.payment_status === "paid";
     const resultId = String(session.metadata?.resultId ?? "").trim();
+    const area = String(session.metadata?.area ?? "").trim();
 
     return NextResponse.json({
       ok: paid,
       paid,
       resultId,
+      area,
       payment_status: session.payment_status,
     });
   } catch (err: any) {
     console.error("stripe verify error:", err);
-    return NextResponse.json(
-      { ok: false, error: err?.message ?? "Verify failed." },
-      { status: 500 }
-    );
+    return NextResponse.json({ ok: false, error: err?.message ?? "Verify failed." }, { status: 500 });
   }
 }
