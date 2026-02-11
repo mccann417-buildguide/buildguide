@@ -1,10 +1,14 @@
 // src/app/lib/types.ts
-
 import type { PhotoAIResult, BidAIResult } from "./aiSchemas";
 
+/**
+ * IMPORTANT:
+ * History uses createdAt as an ISO string so it sorts/prints cleanly
+ * and survives JSON serialization.
+ */
 export type ResultMeta = {
   id: string;
-  createdAt: number; // Date.now()
+  createdAt?: string; // ISO string (set by saveToHistory)
 };
 
 export type PhotoAnalysisResult = PhotoAIResult &

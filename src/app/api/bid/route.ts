@@ -16,11 +16,18 @@ function extractJson(text: string) {
   return JSON.parse(text.slice(start, end + 1));
 }
 
+// Simple UUID v4-ish check (good enough for MVP)
+function isUuid(v: unknown): v is string {
+  if (typeof v !== "string") return false;
+  return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(v);
+}
+
 export async function POST(req: Request) {
   try {
     const openai = getOpenAI();
 
     const body = await req.json().catch(() => null);
+
     const bidText = body?.text;
     const notes = typeof body?.notes === "string" ? body.notes.trim() : "";
 
@@ -28,7 +35,9 @@ export async function POST(req: Request) {
       return NextResponse.json({ error: "Missing text." }, { status: 400 });
     }
 
-    const id = randomUUID();
+    // ✅ KEEP ID STABLE if client provides one (Stripe flow)
+    const requestedId = body?.resultId;
+    const id = isUuid(requestedId) ? requestedId : randomUUID();
 
     const prompt = `
 Return ONLY valid JSON matching:
@@ -46,7 +55,7 @@ Rules:
 - included: what the bid clearly covers
 - missing: common scope gaps/exclusions
 - redFlags: vague wording, allowance traps, payment risk, permit ambiguity, no warranty, no cleanup, etc.
-- typicalRange values like "$8,500–$11,000"
+- typicalRange values like "$8,500–$11,000" (rough, not a promise)
 - keep bullets short & specific
 `;
 
@@ -64,11 +73,16 @@ Rules:
           content: prompt + userContext + "\n\nBID TEXT:\n" + bidText,
         },
       ],
+      temperature: 0.3,
     });
 
     const raw = r.output_text ?? "";
     const json = extractJson(raw);
-    const validated = BidResultSchema.parse(json);
+
+    // ✅ Force ID/kind to match our chosen ID even if model tries to deviate
+    const patched = { ...json, id, kind: "bid" };
+
+    const validated = BidResultSchema.parse(patched);
 
     return NextResponse.json(validated);
   } catch (err: any) {

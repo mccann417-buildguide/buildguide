@@ -6,52 +6,63 @@ import { readFile } from "fs/promises";
 
 export const runtime = "nodejs";
 
-type PhotoBase = {
-  id: string;
-  kind: "photo";
-  identified: string;
-  confidence: "low" | "medium" | "high";
-  looksGood: string[];
-  issues: string[];
-  typicalFixCost?: { minor: string; moderate: string; major: string };
-  suggestedQuestions?: string[];
-};
+/**
+ * pdf-lib StandardFonts are WinAnsi-ish.
+ * Emojis and many unicode chars can break output.
+ * We convert common symbols to ASCII tags and strip remaining non-ascii.
+ */
+function sanitizeText(input: any): string {
+  const s = String(input ?? "");
 
-type PhotoDetailAI = {
-  whyItMatters: string[];
-  priorityFixList: { first: string[]; next: string[]; optional: string[] };
-  contractorQuestions: string[];
-  whatToPhotoNext: string[];
-  pdfSummary: string;
-};
+  const replaced = s
+    .replaceAll("✅", "[OK] ")
+    .replaceAll("☑️", "[OK] ")
+    .replaceAll("✔️", "[OK] ")
+    .replaceAll("⚠️", "[!] ")
+    .replaceAll("🚩", "[FLAG] ")
+    .replaceAll("🧠", "[AI] ")
+    .replaceAll("📌", "[NOTE] ")
+    .replaceAll("🧰", "[TOOLS] ")
+    .replaceAll("❓", "[Q] ")
+    .replaceAll("📸", "[PHOTO] ")
+    .replaceAll("➡️", "-> ")
+    .replaceAll("—", "-")
+    .replaceAll("•", "-")
+    // smart quotes -> normal
+    .replace(/[\u2018\u2019]/g, "'")
+    .replace(/[\u201C\u201D]/g, '"')
+    // non-breaking space
+    .replace(/\u00A0/g, " ");
+
+  // strip remaining non-ascii
+  return replaced.replace(/[^\x00-\x7F]/g, "");
+}
 
 function asArray(v: any): string[] {
   if (!v) return [];
-  return Array.isArray(v) ? v.filter(Boolean).map(String) : [];
+  if (!Array.isArray(v)) return [];
+  return v
+    .filter((x) => x !== null && x !== undefined)
+    .map((x) => sanitizeText(x).trim())
+    .filter(Boolean);
 }
 
 function safeStr(v: any, fallback = ""): string {
-  if (typeof v === "string") return v;
-  return fallback;
+  const out = typeof v === "string" ? v : fallback;
+  return sanitizeText(out).trim();
 }
 
 function tryReadIconPath() {
-  // Update this path if your icon lives elsewhere in /public
   return path.join(process.cwd(), "public", "icons", "icon-192.png");
 }
 
 function splitWords(text: string) {
-  return (text ?? "").split(/\s+/).filter(Boolean);
+  return sanitizeText(text).split(/\s+/).filter(Boolean);
 }
 
-function wrapLines(opts: {
-  text: string;
-  font: any;
-  size: number;
-  maxWidth: number;
-}): string[] {
-  const { text, font, size, maxWidth } = opts;
-  const words = splitWords(text);
+function wrapLines(opts: { text: string; font: any; size: number; maxWidth: number }): string[] {
+  const { font, size, maxWidth } = opts;
+  const words = splitWords(opts.text);
   const lines: string[] = [];
   let line = "";
 
@@ -69,6 +80,120 @@ function wrapLines(opts: {
   return lines.length ? lines : [""];
 }
 
+type MarketComparison = {
+  area: string;
+  expectedRange: { low: string; mid: string; high: string };
+  verdict: "below_typical" | "within_typical" | "above_typical" | "unknown";
+  notes: string[];
+  disclaimer: string;
+};
+
+type NormalizedPhotoBase = {
+  id: string;
+  summary: string;
+  identified?: string;
+  confidence?: string;
+  looksGood: string[];
+  concerns: string[];
+  whatToDoNext: string[];
+  questionsToAsk: string[];
+  typicalFixCost?: { minor: string; moderate: string; major: string };
+};
+
+type NormalizedPhotoDetail = {
+  deeperFindings: string[];
+  qualityChecks: string[];
+  redFlags: string[];
+  whatToDoNext: string[];
+  pdfSummary: string;
+  marketComparison?: MarketComparison;
+};
+
+// Accept BOTH old and new shapes and normalize.
+function normalizePhotoBase(input: any): NormalizedPhotoBase | null {
+  if (!input?.id) return null;
+
+  const looksGood = asArray(input?.looksGood);
+  const concerns = asArray(input?.concerns ?? input?.issues);
+  const whatToDoNext = asArray(input?.whatToDoNext);
+  const questionsToAsk = asArray(input?.questionsToAsk ?? input?.suggestedQuestions);
+  const summary = safeStr(input?.summary, "");
+
+  const identified = safeStr(input?.identified, "");
+  const confidence = safeStr(input?.confidence, "");
+
+  const typicalFixCost =
+    input?.typicalFixCost && typeof input.typicalFixCost === "object"
+      ? {
+          minor: safeStr(input.typicalFixCost.minor, ""),
+          moderate: safeStr(input.typicalFixCost.moderate, ""),
+          major: safeStr(input.typicalFixCost.major, ""),
+        }
+      : undefined;
+
+  return {
+    id: sanitizeText(input.id),
+    summary,
+    identified: identified || undefined,
+    confidence: confidence || undefined,
+    looksGood,
+    concerns,
+    whatToDoNext,
+    questionsToAsk,
+    typicalFixCost,
+  };
+}
+
+function normalizePhotoDetail(input: any): NormalizedPhotoDetail | null {
+  if (!input || typeof input !== "object") return null;
+
+  const deeperFindings = asArray(input?.deeperFindings);
+  const qualityChecks = asArray(input?.qualityChecks);
+  const redFlags = asArray(input?.redFlags);
+  const whatToDoNext = asArray(input?.whatToDoNext);
+  const pdfSummary = safeStr(input?.pdfSummary, "");
+
+  const mcRaw = input?.marketComparison;
+  let marketComparison: MarketComparison | undefined = undefined;
+  if (mcRaw && typeof mcRaw === "object") {
+    marketComparison = {
+      area: safeStr(mcRaw.area, ""),
+      expectedRange: {
+        low: safeStr(mcRaw?.expectedRange?.low, "—"),
+        mid: safeStr(mcRaw?.expectedRange?.mid, "—"),
+        high: safeStr(mcRaw?.expectedRange?.high, "—"),
+      },
+      verdict:
+        mcRaw.verdict === "below_typical" ||
+        mcRaw.verdict === "within_typical" ||
+        mcRaw.verdict === "above_typical"
+          ? mcRaw.verdict
+          : "unknown",
+      notes: asArray(mcRaw.notes),
+      disclaimer: safeStr(mcRaw.disclaimer, ""),
+    };
+  }
+
+  const hasAny =
+    deeperFindings.length ||
+    qualityChecks.length ||
+    redFlags.length ||
+    whatToDoNext.length ||
+    Boolean(pdfSummary) ||
+    Boolean(marketComparison);
+
+  if (!hasAny) return null;
+
+  return {
+    deeperFindings,
+    qualityChecks,
+    redFlags,
+    whatToDoNext,
+    pdfSummary,
+    marketComparison,
+  };
+}
+
 type Ctx = {
   pdfDoc: PDFDocument;
   font: any;
@@ -83,10 +208,16 @@ type Ctx = {
   bottom: number;
 };
 
+function verdictLabel(v: MarketComparison["verdict"]) {
+  if (v === "below_typical") return "Likely below typical";
+  if (v === "within_typical") return "Likely within typical";
+  if (v === "above_typical") return "Likely above typical";
+  return "Unknown / needs more detail";
+}
+
 function drawHeader(ctx: Ctx, title: string, reportId: string) {
   const { page, left, right, top, fontBold, font, icon } = ctx;
 
-  // Header bar
   page.drawRectangle({
     x: 0,
     y: top - 64,
@@ -95,7 +226,6 @@ function drawHeader(ctx: Ctx, title: string, reportId: string) {
     color: rgb(0.98, 0.98, 0.985),
   });
 
-  // Logo
   if (icon) {
     page.drawImage(icon, {
       x: left,
@@ -105,8 +235,7 @@ function drawHeader(ctx: Ctx, title: string, reportId: string) {
     });
   }
 
-  // Title
-  page.drawText(title, {
+  page.drawText(sanitizeText(title), {
     x: left + (icon ? 38 : 0),
     y: top - 38,
     size: 16,
@@ -114,8 +243,7 @@ function drawHeader(ctx: Ctx, title: string, reportId: string) {
     color: rgb(0.1, 0.1, 0.1),
   });
 
-  // Report ID (right)
-  const idText = `Report ID: ${reportId}`;
+  const idText = sanitizeText(`Report ID: ${reportId}`);
   const idSize = 10;
   const idWidth = font.widthOfTextAtSize(idText, idSize);
   page.drawText(idText, {
@@ -126,7 +254,6 @@ function drawHeader(ctx: Ctx, title: string, reportId: string) {
     color: rgb(0.35, 0.35, 0.35),
   });
 
-  // Divider
   page.drawLine({
     start: { x: left, y: top - 68 },
     end: { x: right, y: top - 68 },
@@ -146,7 +273,9 @@ function drawFooter(ctx: Ctx) {
   });
 
   page.drawText(
-    "BuildGuide provides guidance, not a substitute for an on-site professional. Verify code/permits with local officials.",
+    sanitizeText(
+      "BuildGuide provides guidance, not a substitute for an on-site professional. Verify code/permits with local officials."
+    ),
     {
       x: left,
       y: bottom + 12,
@@ -156,7 +285,7 @@ function drawFooter(ctx: Ctx) {
     }
   );
 
-  page.drawText(`Page ${ctx.pageNumber}`, {
+  page.drawText(sanitizeText(`Page ${ctx.pageNumber}`), {
     x: right - 52,
     y: bottom + 12,
     size: 8.5,
@@ -170,7 +299,6 @@ function newPage(ctx: Ctx, title: string, reportId: string) {
   ctx.page = ctx.pdfDoc.addPage([612, 792]);
   drawHeader(ctx, title, reportId);
   drawFooter(ctx);
-  // start cursor under header
   return ctx.top - 92;
 }
 
@@ -181,10 +309,12 @@ function ensureSpace(ctx: Ctx, y: number, needed: number, title: string, reportI
   return y;
 }
 
-function drawSectionTitle(ctx: Ctx, y: number, title: string) {
+function drawSectionTitle(ctx: Ctx, y: number, title: string, reportTitle: string, reportId: string) {
+  y = ensureSpace(ctx, y, 28, reportTitle, reportId);
+
   const { page, left, right, fontBold } = ctx;
 
-  page.drawText(title, {
+  page.drawText(sanitizeText(title), {
     x: left,
     y,
     size: 12,
@@ -192,7 +322,6 @@ function drawSectionTitle(ctx: Ctx, y: number, title: string) {
     color: rgb(0.1, 0.1, 0.1),
   });
 
-  // subtle divider
   page.drawLine({
     start: { x: left, y: y - 6 },
     end: { x: right, y: y - 6 },
@@ -203,7 +332,7 @@ function drawSectionTitle(ctx: Ctx, y: number, title: string) {
   return y - 20;
 }
 
-function drawBullets(ctx: Ctx, y: number, bullets: string[], title: string, reportId: string) {
+function drawBullets(ctx: Ctx, y: number, bullets: string[], reportTitle: string, reportId: string) {
   const { page, left, right, font } = ctx;
 
   const bodySize = 10;
@@ -212,17 +341,20 @@ function drawBullets(ctx: Ctx, y: number, bullets: string[], title: string, repo
 
   const list = bullets.length ? bullets : ["—"];
   for (const b of list) {
-    y = ensureSpace(ctx, y, 26, title, reportId);
+    y = ensureSpace(ctx, y, 22, reportTitle, reportId);
 
-    // bullet dot
-    page.drawText("•", { x: left, y, size: bodySize, font, color: rgb(0.2, 0.2, 0.2) });
+    page.drawText("-", {
+      x: left,
+      y,
+      size: bodySize,
+      font,
+      color: rgb(0.2, 0.2, 0.2),
+    });
 
-    // wrapped text
     const lines = wrapLines({ text: String(b), font, size: bodySize, maxWidth });
-    let first = true;
     for (const ln of lines) {
-      y = ensureSpace(ctx, y, 18, title, reportId);
-      page.drawText(ln, {
+      y = ensureSpace(ctx, y, 18, reportTitle, reportId);
+      page.drawText(sanitizeText(ln), {
         x: left + 14,
         y,
         size: bodySize,
@@ -230,10 +362,6 @@ function drawBullets(ctx: Ctx, y: number, bullets: string[], title: string, repo
         color: rgb(0.18, 0.18, 0.18),
       });
       y -= lineH;
-      first = false;
-      if (!first) {
-        // no-op
-      }
     }
     y -= 2;
   }
@@ -241,23 +369,101 @@ function drawBullets(ctx: Ctx, y: number, bullets: string[], title: string, repo
   return y - 6;
 }
 
-function drawInfoRow(ctx: Ctx, y: number, label: string, value: string) {
-  const { page, left, font, fontBold } = ctx;
-  page.drawText(label, { x: left, y, size: 10, font: fontBold, color: rgb(0.2, 0.2, 0.2) });
-  page.drawText(value, { x: left + 120, y, size: 10, font, color: rgb(0.2, 0.2, 0.2) });
-  return y - 14;
+function drawParagraph(ctx: Ctx, y: number, text: string, reportTitle: string, reportId: string) {
+  const { page, left, right, font } = ctx;
+  const size = 10;
+  const lineH = 14;
+
+  const lines = wrapLines({ text, font, size, maxWidth: right - left });
+  for (const ln of lines) {
+    y = ensureSpace(ctx, y, 18, reportTitle, reportId);
+    page.drawText(sanitizeText(ln), {
+      x: left,
+      y,
+      size,
+      font,
+      color: rgb(0.18, 0.18, 0.18),
+    });
+    y -= lineH;
+  }
+  return y - 6;
+}
+
+function drawMonoBox(ctx: Ctx, y: number, heading: string, text: string, reportTitle: string, reportId: string) {
+  const { left, right, page, fontBold, fontMono } = ctx;
+
+  const headingSize = 11;
+  const monoSize = 9.5;
+  const padding = 12;
+
+  // measure how many lines this will take
+  const lines = wrapLines({
+    text,
+    font: fontMono,
+    size: monoSize,
+    maxWidth: right - left - padding * 2,
+  });
+
+  // cap, but still allow page breaks if needed
+  const maxLines = 220;
+  const used = lines.slice(0, maxLines);
+
+  // compute box height
+  const lineH = 13;
+  const boxH = 18 + padding + used.length * lineH + padding;
+
+  y = ensureSpace(ctx, y, boxH + 10, reportTitle, reportId);
+
+  // heading
+  page.drawText(sanitizeText(heading), {
+    x: left,
+    y,
+    size: headingSize,
+    font: fontBold,
+    color: rgb(0.1, 0.1, 0.1),
+  });
+
+  y -= 16;
+
+  // box background
+  const boxTop = y;
+  page.drawRectangle({
+    x: left,
+    y: boxTop - boxH,
+    width: right - left,
+    height: boxH,
+    color: rgb(0.98, 0.98, 0.985),
+    borderColor: rgb(0.92, 0.92, 0.92),
+    borderWidth: 1,
+  });
+
+  // text in box
+  let ty = boxTop - padding - 10;
+  for (const ln of used) {
+    ty = ensureSpace(ctx, ty, 16, reportTitle, reportId);
+    page.drawText(sanitizeText(ln), {
+      x: left + padding,
+      y: ty,
+      size: monoSize,
+      font: fontMono,
+      color: rgb(0.18, 0.18, 0.18),
+    });
+    ty -= lineH;
+  }
+
+  return boxTop - boxH - 10;
 }
 
 export async function POST(req: Request) {
   try {
     const body = await req.json().catch(() => null);
 
-    const base: PhotoBase | null = body?.base ?? null;
-    const detail: PhotoDetailAI | null = body?.detail ?? null;
-
-    if (!base?.id) {
+    const baseNorm = normalizePhotoBase(body?.base);
+    if (!baseNorm?.id) {
       return NextResponse.json({ error: "Missing base result." }, { status: 400 });
     }
+
+    const detailNorm = normalizePhotoDetail(body?.detail);
 
     const pdfDoc = await PDFDocument.create();
     const page = pdfDoc.addPage([612, 792]);
@@ -266,14 +472,11 @@ export async function POST(req: Request) {
     const fontBold = await pdfDoc.embedFont(StandardFonts.HelveticaBold);
     const fontMono = await pdfDoc.embedFont(StandardFonts.Courier);
 
-    // Try to embed your icon from /public
     let icon: any | undefined = undefined;
     try {
       const iconBytes = await readFile(tryReadIconPath());
-      // icon-192.png should be PNG; if you use JPG, swap to embedJpg
       icon = await pdfDoc.embedPng(iconBytes);
     } catch {
-      // If it fails, we simply render without the icon.
       icon = undefined;
     }
 
@@ -291,26 +494,40 @@ export async function POST(req: Request) {
       bottom: 40,
     };
 
-    const title = "BuildGuide — Photo Report";
-    drawHeader(ctx, title, base.id);
+    const reportTitle = "BuildGuide - Photo Report";
+    drawHeader(ctx, reportTitle, baseNorm.id);
     drawFooter(ctx);
 
     let y = ctx.top - 92;
 
-    // Metadata card
-    y = ensureSpace(ctx, y, 84, title, base.id);
+    // ✅ Clean "Summary Card" that actually includes the base summary
+    const generated = new Date().toISOString().replace("T", " ").slice(0, 19) + " UTC";
+    const identified = baseNorm.identified ? baseNorm.identified : "Unknown";
+    const confidence = baseNorm.confidence ? baseNorm.confidence : "low";
+
+    // compute summary lines for card
+    const summaryText = baseNorm.summary || "—";
+    const summaryLines = wrapLines({
+      text: summaryText,
+      font: ctx.font,
+      size: 10,
+      maxWidth: ctx.right - ctx.left - 28,
+    }).slice(0, 10); // keep card tidy
+
+    const cardH = 18 + 12 + summaryLines.length * 14 + 12 + 32; // title + summary + meta row
+    y = ensureSpace(ctx, y, cardH + 12, reportTitle, baseNorm.id);
+
     ctx.page.drawRectangle({
       x: ctx.left,
-      y: y - 62,
+      y: y - cardH,
       width: ctx.right - ctx.left,
-      height: 62,
+      height: cardH,
       color: rgb(1, 1, 1),
       borderColor: rgb(0.9, 0.9, 0.9),
       borderWidth: 1,
     });
 
-    const generated = new Date().toISOString().replace("T", " ").slice(0, 19) + " UTC";
-    ctx.page.drawText("Summary", {
+    ctx.page.drawText("Report Summary", {
       x: ctx.left + 14,
       y: y - 18,
       size: 12,
@@ -318,46 +535,54 @@ export async function POST(req: Request) {
       color: rgb(0.12, 0.12, 0.12),
     });
 
-    // Identified
-    const identified = safeStr((base as any).identified, "Unknown");
-    const confidence = safeStr((base as any).confidence, "low");
+    let sy = y - 36;
+    for (const ln of summaryLines) {
+      ctx.page.drawText(sanitizeText(ln), {
+        x: ctx.left + 14,
+        y: sy,
+        size: 10,
+        font: ctx.font,
+        color: rgb(0.18, 0.18, 0.18),
+      });
+      sy -= 14;
+    }
 
-    ctx.page.drawText(identified, {
+    // meta row
+    ctx.page.drawText(sanitizeText(`Identified: ${identified}`), {
       x: ctx.left + 14,
-      y: y - 36,
-      size: 11,
-      font: ctx.font,
-      color: rgb(0.18, 0.18, 0.18),
-    });
-
-    ctx.page.drawText(`Confidence: ${confidence}`, {
-      x: ctx.right - 160,
-      y: y - 36,
-      size: 10,
-      font: ctx.font,
-      color: rgb(0.35, 0.35, 0.35),
-    });
-
-    ctx.page.drawText(`Generated: ${generated}`, {
-      x: ctx.left + 14,
-      y: y - 52,
+      y: y - cardH + 18,
       size: 9,
       font: ctx.font,
       color: rgb(0.45, 0.45, 0.45),
     });
 
-    y -= 84;
+    ctx.page.drawText(sanitizeText(`Confidence: ${confidence}`), {
+      x: ctx.left + 220,
+      y: y - cardH + 18,
+      size: 9,
+      font: ctx.font,
+      color: rgb(0.45, 0.45, 0.45),
+    });
 
-    // Typical fix cost (optional)
-    const cost = (base as any).typicalFixCost ?? null;
-    if (cost?.minor || cost?.moderate || cost?.major) {
-      y = ensureSpace(ctx, y, 56, title, base.id);
+    ctx.page.drawText(sanitizeText(`Generated: ${generated}`), {
+      x: ctx.right - 210,
+      y: y - cardH + 18,
+      size: 9,
+      font: ctx.font,
+      color: rgb(0.45, 0.45, 0.45),
+    });
+
+    y = y - cardH - 18;
+
+    // Typical fix cost (if present)
+    if (baseNorm.typicalFixCost?.minor || baseNorm.typicalFixCost?.moderate || baseNorm.typicalFixCost?.major) {
+      y = ensureSpace(ctx, y, 58, reportTitle, baseNorm.id);
 
       ctx.page.drawRectangle({
         x: ctx.left,
-        y: y - 40,
+        y: y - 42,
         width: ctx.right - ctx.left,
-        height: 40,
+        height: 42,
         color: rgb(0.98, 0.98, 0.985),
         borderColor: rgb(0.92, 0.92, 0.92),
         borderWidth: 1,
@@ -371,9 +596,12 @@ export async function POST(req: Request) {
         color: rgb(0.12, 0.12, 0.12),
       });
 
-      const rangeText = `Minor: ${safeStr(cost.minor)}   Moderate: ${safeStr(cost.moderate)}   Major: ${safeStr(
-        cost.major
-      )}`;
+      const rangeText = sanitizeText(
+        `Minor: ${baseNorm.typicalFixCost?.minor ?? "—"}   Moderate: ${
+          baseNorm.typicalFixCost?.moderate ?? "—"
+        }   Major: ${baseNorm.typicalFixCost?.major ?? "—"}`
+      );
+
       ctx.page.drawText(rangeText, {
         x: ctx.left + 14,
         y: y - 32,
@@ -382,66 +610,74 @@ export async function POST(req: Request) {
         color: rgb(0.2, 0.2, 0.2),
       });
 
-      y -= 58;
+      y -= 60;
     }
 
-    // Sections
-    y = drawSectionTitle(ctx, y, "✅ Looks Good");
-    y = drawBullets(ctx, y, asArray((base as any).looksGood), title, base.id);
+    // Base sections (always)
+    y = drawSectionTitle(ctx, y, "[OK] What Looks Good", reportTitle, baseNorm.id);
+    y = drawBullets(ctx, y, baseNorm.looksGood, reportTitle, baseNorm.id);
 
-    y = drawSectionTitle(ctx, y, "⚠️ Possible Issues");
-    y = drawBullets(ctx, y, asArray((base as any).issues), title, base.id);
+    y = drawSectionTitle(ctx, y, "[!] Concerns", reportTitle, baseNorm.id);
+    y = drawBullets(ctx, y, baseNorm.concerns, reportTitle, baseNorm.id);
 
-    // Detail (if included)
-    if (detail) {
-      y = drawSectionTitle(ctx, y, "📌 Why It Matters");
-      y = drawBullets(ctx, y, asArray(detail.whyItMatters), title, base.id);
+    y = drawSectionTitle(ctx, y, "Next Steps", reportTitle, baseNorm.id);
+    y = drawBullets(ctx, y, baseNorm.whatToDoNext, reportTitle, baseNorm.id);
 
-      y = drawSectionTitle(ctx, y, "🧰 Priority Fix List — Do First");
-      y = drawBullets(ctx, y, asArray(detail.priorityFixList?.first), title, base.id);
+    // Paid detail sections (only if passed)
+    if (detailNorm) {
+      if (detailNorm.marketComparison) {
+        const mc = detailNorm.marketComparison;
 
-      y = drawSectionTitle(ctx, y, "🧰 Priority Fix List — Do Next");
-      y = drawBullets(ctx, y, asArray(detail.priorityFixList?.next), title, base.id);
+        y = drawSectionTitle(ctx, y, "Local Price Reality Check", reportTitle, baseNorm.id);
+        y = drawParagraph(ctx, y, `Area: ${mc.area}`, reportTitle, baseNorm.id);
+        y = drawParagraph(
+          ctx,
+          y,
+          `Expected range: ${mc.expectedRange.low} / ${mc.expectedRange.mid} / ${mc.expectedRange.high}`,
+          reportTitle,
+          baseNorm.id
+        );
+        y = drawParagraph(ctx, y, `Verdict: ${verdictLabel(mc.verdict)}`, reportTitle, baseNorm.id);
 
-      y = drawSectionTitle(ctx, y, "🧰 Priority Fix List — Optional");
-      y = drawBullets(ctx, y, asArray(detail.priorityFixList?.optional), title, base.id);
-
-      y = drawSectionTitle(ctx, y, "❓ Questions For Your Contractor");
-      y = drawBullets(ctx, y, asArray(detail.contractorQuestions), title, base.id);
-
-      y = drawSectionTitle(ctx, y, "📸 What To Photograph Next");
-      y = drawBullets(ctx, y, asArray(detail.whatToPhotoNext), title, base.id);
-
-      const summary = safeStr(detail.pdfSummary, "");
-      if (summary) {
-        y = drawSectionTitle(ctx, y, "📝 PDF Summary");
-        const lines = wrapLines({
-          text: summary,
-          font: ctx.fontMono,
-          size: 9.5,
-          maxWidth: ctx.right - ctx.left,
-        });
-
-        for (const ln of lines.slice(0, 200)) {
-          y = ensureSpace(ctx, y, 16, title, base.id);
-          ctx.page.drawText(ln, {
-            x: ctx.left,
-            y,
-            size: 9.5,
-            font: ctx.fontMono,
-            color: rgb(0.18, 0.18, 0.18),
-          });
-          y -= 13;
+        if (mc.notes?.length) {
+          y = drawBullets(ctx, y, mc.notes, reportTitle, baseNorm.id);
         }
-        y -= 6;
+        if (mc.disclaimer) {
+          y = drawParagraph(ctx, y, mc.disclaimer, reportTitle, baseNorm.id);
+        }
+      }
+
+      if (detailNorm.qualityChecks.length) {
+        y = drawSectionTitle(ctx, y, "Quality Checks", reportTitle, baseNorm.id);
+        y = drawBullets(ctx, y, detailNorm.qualityChecks, reportTitle, baseNorm.id);
+      }
+
+      if (detailNorm.deeperFindings.length) {
+        y = drawSectionTitle(ctx, y, "Deeper Findings", reportTitle, baseNorm.id);
+        y = drawBullets(ctx, y, detailNorm.deeperFindings, reportTitle, baseNorm.id);
+      }
+
+      if (detailNorm.redFlags.length) {
+        y = drawSectionTitle(ctx, y, "Red Flags", reportTitle, baseNorm.id);
+        y = drawBullets(ctx, y, detailNorm.redFlags, reportTitle, baseNorm.id);
+      }
+
+      if (detailNorm.whatToDoNext.length) {
+        y = drawSectionTitle(ctx, y, "Detailed Next Steps", reportTitle, baseNorm.id);
+        y = drawBullets(ctx, y, detailNorm.whatToDoNext, reportTitle, baseNorm.id);
+      }
+
+      if (detailNorm.pdfSummary) {
+        y = drawMonoBox(ctx, y, "PDF-ready Summary", detailNorm.pdfSummary, reportTitle, baseNorm.id);
       }
     } else {
-      // If no detail passed, show suggested questions
-      y = drawSectionTitle(ctx, y, "💬 Suggested Questions");
-      y = drawBullets(ctx, y, asArray((base as any).suggestedQuestions), title, base.id);
+      // If no paid detail was provided, include questions
+      if (baseNorm.questionsToAsk.length) {
+        y = drawSectionTitle(ctx, y, "Suggested Questions", reportTitle, baseNorm.id);
+        y = drawBullets(ctx, y, baseNorm.questionsToAsk, reportTitle, baseNorm.id);
+      }
     }
 
-    // Return PDF
     const bytes = (await pdfDoc.save()) as Uint8Array;
     const arrayBuffer = bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength) as ArrayBuffer;
     const blob = new Blob([arrayBuffer], { type: "application/pdf" });
@@ -449,7 +685,7 @@ export async function POST(req: Request) {
     return new NextResponse(blob, {
       headers: {
         "Content-Type": "application/pdf",
-        "Content-Disposition": `attachment; filename="BuildGuide-PhotoReport-${base.id}.pdf"`,
+        "Content-Disposition": `attachment; filename="BuildGuide-PhotoReport-${baseNorm.id}.pdf"`,
       },
     });
   } catch (err: any) {

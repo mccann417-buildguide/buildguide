@@ -131,20 +131,13 @@ function verdictTone(v: Verdict) {
   return "border-neutral-200 bg-neutral-50";
 }
 
-function isPaidPlan(planId: string) {
-  // ✅ MUST include project_pass_14d so it auto-unlocks
-  return planId === "home_plus" || planId === "contractor_pro" || planId === "project_pass_14d";
-}
-
 function FullReportCard({
   onUnlock,
-  onGoHomePlus,
   hasResult,
   teaserArea,
   disabled,
 }: {
   onUnlock: () => void;
-  onGoHomePlus: () => void;
   hasResult: boolean;
   teaserArea: string;
   disabled?: boolean;
@@ -162,25 +155,14 @@ function FullReportCard({
           </div>
         </div>
 
-        <div className="shrink-0 flex flex-col gap-2 items-stretch">
-          <button
-            onClick={onUnlock}
-            disabled={disabled}
-            className="rounded-xl bg-black text-white px-4 py-2.5 text-sm font-medium hover:bg-black/90 disabled:opacity-50"
-            title={!hasResult ? "Run Analyze Bid first so the unlock applies to that report" : ""}
-          >
-            Unlock Full Report $2.99
-          </button>
-
-          {/* ✅ NEW: same second option as Photo */}
-          <button
-            type="button"
-            onClick={onGoHomePlus}
-            className="rounded-xl border px-4 py-2.5 text-sm font-medium hover:bg-neutral-50"
-          >
-            Go Home Plus
-          </button>
-        </div>
+        <button
+          onClick={onUnlock}
+          disabled={disabled}
+          className="shrink-0 rounded-xl bg-black text-white px-4 py-2.5 text-sm font-medium hover:bg-black/90 disabled:opacity-50"
+          title={!hasResult ? "Run Analyze Bid first so the unlock applies to that report" : ""}
+        >
+          Unlock Full Report $2.99
+        </button>
       </div>
 
       <div className="mt-4 rounded-2xl border bg-neutral-50 p-4">
@@ -285,25 +267,15 @@ function BidPageInner({
   const topRef = React.useRef<HTMLDivElement | null>(null);
 
   const effectiveRid = (result?.id ?? paidRid) ? String(result?.id ?? paidRid) : null;
+  const unlocked = effectiveRid ? isAddonUnlocked(String(effectiveRid)) : false;
 
-  // ✅ “paid” = subscription/pass OR addon unlocked for this result
-  const unlocked = isPaidPlan(planId) || (effectiveRid ? isAddonUnlocked(effectiveRid) : false);
-
-  const canAnalyze = allowed || unlocked;
   const [formOpen, setFormOpen] = React.useState(true);
 
   const generateDetailAI = React.useCallback(async () => {
-    if (!result) return;
-
-    // ✅ If user is paid via plan (home_plus/project_pass), allow generating detail without addon flag
-    const isPlanPaid = isPaidPlan(planId);
     const rid = result?.id ? String(result.id) : null;
-
-    // If not paid plan, require addon unlock for this rid
-    if (!isPlanPaid) {
-      if (!rid) return;
-      if (!isAddonUnlocked(rid)) return;
-    }
+    if (!result) return;
+    if (!rid) return;
+    if (!isAddonUnlocked(rid)) return;
 
     setDetailLoading(true);
     setDetailError(null);
@@ -349,13 +321,16 @@ function BidPageInner({
     } finally {
       setDetailLoading(false);
     }
-  }, [result, compare, notes, text, planId]);
+  }, [result, compare, notes, text]);
 
-  // ✅ Auto-generate after unlock (addon OR plan)
   React.useEffect(() => {
     if (!unlocked) return;
     if (!result) return;
     if (detail || detailLoading) return;
+
+    const rid = String(result.id);
+    if (!isAddonUnlocked(rid)) return;
+
     generateDetailAI();
   }, [unlocked, result, detail, detailLoading, generateDetailAI]);
 
@@ -392,24 +367,26 @@ function BidPageInner({
           const vdata = await v.json().catch(() => null);
           const entitlement = vdata?.entitlement;
 
-          // ✅ Subscription
           const subOk =
-            v.ok &&
-            vdata?.ok &&
-            entitlement?.type === "subscription" &&
-            (entitlement?.status === "active" || entitlement?.status === "trialing");
+            (v.ok && vdata?.ok && vdata?.mode === "subscription") ||
+            (v.ok &&
+              vdata?.ok &&
+              entitlement?.type === "subscription" &&
+              (entitlement?.status === "active" || entitlement?.status === "trialing"));
 
           if (subOk) {
             setPlan("home_plus");
             setUnlockToast("✅ Subscription confirmed — Pro is active.");
           } else {
-            // ✅ One-report BID unlock only
-            const oneBidOk = v.ok && vdata?.ok && entitlement?.type === "one_report" && entitlement?.kind === "bid";
+            const oneBidOk =
+              (v.ok && vdata?.ok && vdata?.mode === "payment" && !!rid) ||
+              (v.ok && vdata?.ok && entitlement?.type === "one_report" && entitlement?.kind === "bid");
 
             if (rid && oneBidOk) {
               setAddonUnlocked(rid);
               markUnlocked(rid);
-              setUnlockToast("✅ Payment confirmed — Full Report unlocked.");
+              setUnlockToast("✅ Payment confirmed — Full Bid Report unlocked.");
+
               setTimeout(() => {
                 generateDetailAI();
               }, 0);
@@ -428,7 +405,7 @@ function BidPageInner({
   }, []);
 
   async function runBidAnalysis() {
-    if (!canAnalyze) {
+    if (!allowed && !unlocked) {
       openPaywall();
       return;
     }
@@ -451,7 +428,7 @@ function BidPageInner({
 
       const next = data as BidAnalysisResult;
 
-      // ✅ New results start locked unless plan is paid OR Stripe verify confirms for this rid
+      // NEW results should start locked
       clearAddonUnlocked(String(next.id));
 
       setResult(next);
@@ -489,14 +466,15 @@ function BidPageInner({
 
       const returnPath = `/bid?resultId=${encodeURIComponent(targetResultId)}`;
 
+      // ✅ IMPORTANT: your checkout route expects `kind`
       const res = await fetch("/api/stripe/checkout", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          plan: "one_report_bid",
+          kind: "one_report",              // <-- required by your route
+          plan: "one_report_bid",          // <-- harmless extra (ignored if not used)
           successPath: returnPath,
           cancelPath: returnPath,
-          resultId: String(targetResultId),
         }),
       });
 
@@ -514,36 +492,6 @@ function BidPageInner({
     } finally {
       setUnlockBusy(false);
     }
-  }
-
-  async function downloadBidPdf() {
-    if (!result) return;
-    if (unlocked && !detail) {
-      alert("Full report is still generating. Try again in a moment.");
-      return;
-    }
-
-    const res = await fetch("/api/bid-pdf", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ base: result, detail: detail ?? null, kind: "bid" }),
-    });
-
-    if (!res.ok) {
-      const e = await res.json().catch(() => null);
-      alert(e?.error ?? "PDF download failed.");
-      return;
-    }
-
-    const blob = await res.blob();
-    const url = window.URL.createObjectURL(blob);
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = `BuildGuide_Bid_${result.id}.pdf`;
-    document.body.appendChild(a);
-    a.click();
-    a.remove();
-    window.URL.revokeObjectURL(url);
   }
 
   function goAsk(q: string) {
@@ -578,9 +526,7 @@ function BidPageInner({
         </div>
       </div>
 
-      {unlockToast ? (
-        <div className="rounded-2xl border bg-neutral-50 p-4 text-sm text-neutral-800">{unlockToast}</div>
-      ) : null}
+      {unlockToast ? <div className="rounded-2xl border bg-neutral-50 p-4 text-sm text-neutral-800">{unlockToast}</div> : null}
 
       <TestimonialCard
         name="Courtney S."
@@ -588,20 +534,13 @@ function BidPageInner({
         quote="BuildGuide helped me ask the right questions — I felt confident signing once I saw what was missing."
       />
 
-      {/* ✅ If user is on Home Plus / Project Pass, do NOT show $2.99 upsell card */}
-      {result && !unlocked && !isPaidPlan(planId) ? (
+      {result && !unlocked ? (
         <FullReportCard
           hasResult={!!result}
           teaserArea={teaserArea}
           disabled={!result || unlockBusy}
-          onGoHomePlus={() => {
-            window.location.href = "/pricing";
-          }}
           onUnlock={() => {
-            if (!result?.id) {
-              alert("Run Analyze Bid first so we can unlock the correct report.");
-              return;
-            }
+            if (!result?.id) return;
             return startStripeUnlock(String(result.id));
           }}
         />
@@ -617,7 +556,7 @@ function BidPageInner({
                   Local pricing, deeper analysis, negotiation tips, and a PDF-ready summary.
                 </p>
                 <div className="mt-2 text-xs text-neutral-600">
-                  ✅ Unlocked · Area: <span className="font-semibold">{compare.area}</span>
+                  ✅ Unlocked for this bid · Area: <span className="font-semibold">{compare.area}</span>
                 </div>
               </div>
 
@@ -625,18 +564,9 @@ function BidPageInner({
                 <button
                   onClick={generateDetailAI}
                   disabled={detailLoading}
-                  className="rounded-xl bg-black text-white px-4 py-2.5 text-sm font-medium disabled:opacity-50 hover:bg-black/90"
+                  className="rounded-xl bg-black text-white px-4 py-2.5 text-sm font-medium disabled:opacity-50 hover lawns:bg-black/90"
                 >
                   {detailLoading ? "Generating…" : detail ? "Regenerate (AI)" : "Generate (AI)"}
-                </button>
-
-                <button
-                  onClick={downloadBidPdf}
-                  disabled={detailLoading || (unlocked && !detail)}
-                  className="rounded-xl border px-4 py-2.5 text-sm font-medium hover:bg-neutral-50 disabled:opacity-50"
-                  title={unlocked && !detail ? "Full report is generating… PDF will enable once ready." : ""}
-                >
-                  Download Printable PDF
                 </button>
               </div>
             </div>
@@ -672,27 +602,12 @@ function BidPageInner({
                   </div>
                 </div>
 
-                <div className="mt-3 text-xs text-neutral-700">
-                  Accuracy improves with more detail: project type, size/sqft, finish level, demo, and permits.
-                </div>
-
                 {detail.marketComparison.notes?.length ? (
                   <ul className="mt-3 space-y-1 text-sm text-neutral-800">
                     {detail.marketComparison.notes.map((n, i) => (
                       <li key={i}>• {n}</li>
                     ))}
                   </ul>
-                ) : null}
-
-                {detail.marketComparison.assumptions?.length ? (
-                  <div className="mt-3 rounded-xl border bg-white/60 p-3">
-                    <div className="text-xs font-semibold text-neutral-700">Assumptions used</div>
-                    <ul className="mt-2 space-y-1 text-xs text-neutral-700">
-                      {detail.marketComparison.assumptions.map((a, i) => (
-                        <li key={i}>• {a}</li>
-                      ))}
-                    </ul>
-                  </div>
                 ) : null}
 
                 <div className="mt-3 text-xs text-neutral-700">{detail.marketComparison.disclaimer}</div>
@@ -739,7 +654,9 @@ function BidPageInner({
 
           <div className="rounded-2xl border p-4">
             <div className="text-sm font-semibold">Optional: Job context</div>
-            <p className="mt-1 text-xs text-neutral-600">Example: “kitchen remodel”, “insurance repair”, “occupied home”.</p>
+            <p className="mt-1 text-xs text-neutral-600">
+              Add background (example: “kitchen remodel”, “insurance repair”, “historic home”, “timeline ASAP”).
+            </p>
 
             <textarea
               value={notes}
@@ -752,7 +669,7 @@ function BidPageInner({
           <div className="rounded-2xl border p-4 space-y-3">
             <div>
               <div className="text-sm font-semibold">📍 Your area (used for local comparison)</div>
-              <p className="mt-1 text-xs text-neutral-600">Example: “Troy, NY 12180”.</p>
+              <p className="mt-1 text-xs text-neutral-600">Example: “Troy, NY 12180” or “90210”.</p>
               <input
                 value={compare.area}
                 onChange={(e) => setCompare((p) => ({ ...p, area: e.target.value }))}

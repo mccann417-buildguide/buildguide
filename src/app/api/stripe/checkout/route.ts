@@ -4,55 +4,104 @@ import Stripe from "stripe";
 
 export const runtime = "nodejs";
 
-function requireEnv(name: string): string {
+const stripe = new Stripe(process.env.STRIPE_SECRET_KEY as string, {
+  apiVersion: "2024-06-20" as any,
+});
+
+function getBaseUrl(req: Request) {
+  const envUrl = process.env.NEXT_PUBLIC_APP_URL;
+  if (envUrl) return envUrl.replace(/\/$/, "");
+  const origin = req.headers.get("origin");
+  if (origin) return origin.replace(/\/$/, "");
+  return "http://localhost:3000";
+}
+
+function requireEnv(name: string) {
   const v = process.env[name];
   if (!v) throw new Error(`Missing env var: ${name}`);
   return v;
 }
 
-function getOrigin(req: Request) {
-  const origin = req.headers.get("origin");
-  if (origin) return origin;
+type CheckoutBody = {
+  // legacy/simple
+  kind?: "one_report" | "project_pass_14d" | "home_plus";
 
-  const proto = req.headers.get("x-forwarded-proto");
-  const host = req.headers.get("x-forwarded-host") || req.headers.get("host");
-  if (proto && host) return `${proto}://${host}`;
+  // preferred
+  plan?: "one_report_photo" | "one_report_bid" | "project_pass_14d" | "home_plus";
 
-  return "http://localhost:3000";
+  successPath?: string;
+  cancelPath?: string;
+
+  // optional metadata
+  resultId?: string;
+};
+
+function pickPriceId(body: CheckoutBody) {
+  const plan = body.plan;
+
+  if (plan === "one_report_photo") return process.env.STRIPE_ONE_REPORT_PHOTO_PRICE_ID ?? null;
+  if (plan === "one_report_bid") return process.env.STRIPE_ONE_REPORT_BID_PRICE_ID ?? null;
+
+  if (plan === "project_pass_14d") return process.env.STRIPE_PROJECT_PASS_14D_PRICE_ID ?? null;
+  if (plan === "home_plus") return process.env.STRIPE_HOME_PLUS_PRICE_ID ?? null;
+
+  // Fallback for older callers using "kind"
+  const kind = body.kind ?? "one_report";
+  if (kind === "one_report") return process.env.STRIPE_ONE_REPORT_PRICE_ID ?? null;
+  if (kind === "project_pass_14d") return process.env.STRIPE_PROJECT_PASS_14D_PRICE_ID ?? null;
+  if (kind === "home_plus") return process.env.STRIPE_HOME_PLUS_PRICE_ID ?? null;
+
+  return null;
 }
 
 export async function POST(req: Request) {
   try {
-    const STRIPE_SECRET_KEY = requireEnv("STRIPE_SECRET_KEY");
-    const STRIPE_BID_ADDON_PRICE_ID = requireEnv("STRIPE_BID_ADDON_PRICE_ID");
+    requireEnv("STRIPE_SECRET_KEY");
 
-    // IMPORTANT: don't pass apiVersion (prevents TS mismatch squiggles)
-    const stripe = new Stripe(STRIPE_SECRET_KEY);
+    const body = (await req.json().catch(() => ({}))) as CheckoutBody;
 
-    const body = await req.json().catch(() => ({}));
-    const resultId = String(body?.resultId ?? "").trim();
-    const area = String(body?.area ?? "").trim();
-
-    if (!resultId) {
-      return NextResponse.json({ error: "Missing resultId" }, { status: 400 });
+    const priceId = pickPriceId(body);
+    if (!priceId) {
+      return NextResponse.json(
+        {
+          error:
+            `Missing priceId. Check .env.local:\n` +
+            `- STRIPE_ONE_REPORT_PHOTO_PRICE_ID\n` +
+            `- STRIPE_ONE_REPORT_BID_PRICE_ID\n` +
+            `- STRIPE_PROJECT_PASS_14D_PRICE_ID\n` +
+            `- STRIPE_HOME_PLUS_PRICE_ID\n` +
+            `(optional fallback) STRIPE_ONE_REPORT_PRICE_ID`,
+          debug: { receivedPlan: body.plan ?? null, receivedKind: body.kind ?? null },
+        },
+        { status: 400 }
+      );
     }
 
-    const origin = getOrigin(req);
+    const baseUrl = getBaseUrl(req);
+    const successPath = body.successPath ?? "/";
+    const cancelPath = body.cancelPath ?? "/";
+
+    const isSubscription = body.plan === "home_plus" || body.kind === "home_plus";
+    const mode: Stripe.Checkout.SessionCreateParams.Mode = isSubscription ? "subscription" : "payment";
+
+    // ✅ ALWAYS append ?session_id=... so the app can call /api/stripe/verify
+    const successUrl = `${baseUrl}${successPath}${successPath.includes("?") ? "&" : "?"}session_id={CHECKOUT_SESSION_ID}`;
 
     const session = await stripe.checkout.sessions.create({
-      mode: "payment",
-      line_items: [{ price: STRIPE_BID_ADDON_PRICE_ID, quantity: 1 }],
-      success_url: `${origin}/bid?resultId=${encodeURIComponent(resultId)}&session_id={CHECKOUT_SESSION_ID}`,
-      cancel_url: `${origin}/bid?resultId=${encodeURIComponent(resultId)}`,
+      mode,
+      line_items: [{ price: priceId, quantity: 1 }],
+      success_url: successUrl,
+      cancel_url: `${baseUrl}${cancelPath}`,
       metadata: {
-        resultId,
-        area,
-        product: "bid_addon_full_report",
+        plan: body.plan ?? "",
+        kind: body.kind ?? "",
+        resultId: body.resultId ?? "",
+        returnTo: successPath,
       },
     });
 
     return NextResponse.json({ url: session.url });
   } catch (err: any) {
-    return NextResponse.json({ error: err?.message ?? "Checkout failed." }, { status: 500 });
+    return NextResponse.json({ error: err?.message ?? "Stripe checkout error" }, { status: 500 });
   }
 }

@@ -1,345 +1,724 @@
 // src/app/api/bid-pdf/route.ts
 import { NextResponse } from "next/server";
 import { PDFDocument, StandardFonts, rgb } from "pdf-lib";
+import path from "path";
+import { readFile } from "fs/promises";
 
 export const runtime = "nodejs";
 
-type MarketComparison = {
-  area: string;
-  expectedRange: { low: string; mid: string; high: string };
-  verdict: "below_typical" | "within_typical" | "above_typical" | "unknown";
-  notes: string[];
-  disclaimer: string;
-};
+/**
+ * pdf-lib StandardFonts are WinAnsi-ish.
+ * Emojis and many unicode chars can break output.
+ * Convert common symbols to ASCII tags and strip remaining non-ascii.
+ */
+function sanitizeText(input: any): string {
+  const s = String(input ?? "");
 
-type BidDetailAI = {
-  deeperIssues?: string[];
-  paymentScheduleNotes?: string[];
-  contractWarnings?: string[];
-  negotiationTips?: string[];
-  pdfSummary?: string;
-  marketComparison?: MarketComparison;
-};
+  const replaced = s
+    .replaceAll("✅", "[OK] ")
+    .replaceAll("☑️", "[OK] ")
+    .replaceAll("✔️", "[OK] ")
+    .replaceAll("⚠️", "[!] ")
+    .replaceAll("🚩", "[FLAG] ")
+    .replaceAll("🧠", "[AI] ")
+    .replaceAll("📌", "[NOTE] ")
+    .replaceAll("🧾", "[DOC] ")
+    .replaceAll("💵", "[$] ")
+    .replaceAll("🤝", "[TIP] ")
+    .replaceAll("➡️", "-> ")
+    .replaceAll("—", "-")
+    .replaceAll("•", "-")
+    .replace(/[\u2018\u2019]/g, "'")
+    .replace(/[\u201C\u201D]/g, '"')
+    .replace(/\u00A0/g, " ");
 
-type BidBase = {
-  id: string;
-  kind: "bid";
-  included: string[];
-  missing: string[];
-  redFlags: string[];
-  typicalRange?: { low: string; mid: string; high: string };
-  questionsToAsk?: string[];
-};
+  return replaced.replace(/[^\x00-\x7F]/g, "");
+}
 
 function asArray(v: any): string[] {
   if (!v) return [];
-  return Array.isArray(v) ? v.filter(Boolean).map(String) : [];
+  if (!Array.isArray(v)) return [];
+  return v
+    .filter((x) => x !== null && x !== undefined)
+    .map((x) => sanitizeText(x).trim())
+    .filter(Boolean);
 }
 
 function safeStr(v: any, fallback = ""): string {
-  if (typeof v === "string") return v;
-  return fallback;
+  const out = typeof v === "string" ? v : fallback;
+  return sanitizeText(out).trim();
 }
 
-function verdictLabel(v?: string) {
-  if (v === "below_typical") return "Likely below typical";
-  if (v === "within_typical") return "Likely within typical";
-  if (v === "above_typical") return "Likely above typical";
-  return "Unknown / needs more detail";
+function tryReadIconPath() {
+  return path.join(process.cwd(), "public", "icons", "icon-192.png");
 }
 
-function drawWrappedText(opts: {
-  page: any;
-  text: string;
-  x: number;
-  y: number;
-  maxWidth: number;
-  font: any;
-  size: number;
-  lineHeight: number;
-  color?: any;
-}) {
-  const { page, text, x, maxWidth, font, size, lineHeight } = opts;
-  const color = opts.color ?? rgb(0, 0, 0);
+function splitWords(text: string) {
+  return sanitizeText(text).split(/\s+/).filter(Boolean);
+}
 
-  const words = (text ?? "").split(/\s+/).filter(Boolean);
+function wrapLines(opts: { text: string; font: any; size: number; maxWidth: number }): string[] {
+  const { font, size, maxWidth } = opts;
+  const words = splitWords(opts.text);
+  const lines: string[] = [];
   let line = "";
-  let cursorY = opts.y;
 
   for (const w of words) {
     const test = line ? `${line} ${w}` : w;
     const width = font.widthOfTextAtSize(test, size);
-
     if (width <= maxWidth) {
       line = test;
       continue;
     }
-
-    if (line) {
-      page.drawText(line, { x, y: cursorY, size, font, color });
-      cursorY -= lineHeight;
-    }
+    if (line) lines.push(line);
     line = w;
   }
-
-  if (line) {
-    page.drawText(line, { x, y: cursorY, size, font, color });
-    cursorY -= lineHeight;
-  }
-
-  return cursorY;
+  if (line) lines.push(line);
+  return lines.length ? lines : [""];
 }
 
-function drawSection(opts: {
+type Verdict =
+  | "significantly_below_market"
+  | "below_market"
+  | "within_typical"
+  | "above_market"
+  | "significantly_above_market"
+  | "unknown";
+
+type MarketComparison = {
+  area: string;
+  expectedRange: { low: string; mid: string; high: string };
+  verdict: Verdict;
+  notes: string[];
+  disclaimer: string;
+  bidTotal?: string;
+  assumptions?: string[];
+  confidence?: "low" | "medium" | "high";
+};
+
+type BidBase = {
+  id: string;
+  included: string[];
+  missing: string[];
+  redFlags: string[];
+  questionsToAsk: string[];
+};
+
+type BidDetailAI = {
+  deeperIssues: string[];
+  paymentScheduleNotes: string[];
+  contractWarnings: string[];
+  negotiationTips: string[];
+  pdfSummary: string;
+  marketComparison?: MarketComparison;
+};
+
+// Normalize any shapes safely
+function normalizeBase(input: any): BidBase | null {
+  if (!input?.id) return null;
+  return {
+    id: sanitizeText(input.id),
+    included: asArray(input?.included),
+    missing: asArray(input?.missing),
+    redFlags: asArray(input?.redFlags),
+    questionsToAsk: asArray(input?.questionsToAsk),
+  };
+}
+
+function normalizeDetail(input: any): BidDetailAI | null {
+  if (!input || typeof input !== "object") return null;
+
+  const deeperIssues = asArray(input?.deeperIssues);
+  const paymentScheduleNotes = asArray(input?.paymentScheduleNotes);
+  const contractWarnings = asArray(input?.contractWarnings);
+  const negotiationTips = asArray(input?.negotiationTips);
+  const pdfSummary = safeStr(input?.pdfSummary, "");
+
+  const mcRaw = input?.marketComparison;
+  let marketComparison: MarketComparison | undefined = undefined;
+
+  if (mcRaw && typeof mcRaw === "object") {
+    const verdict: Verdict =
+      mcRaw.verdict === "significantly_below_market" ||
+      mcRaw.verdict === "below_market" ||
+      mcRaw.verdict === "within_typical" ||
+      mcRaw.verdict === "above_market" ||
+      mcRaw.verdict === "significantly_above_market" ||
+      mcRaw.verdict === "unknown"
+        ? mcRaw.verdict
+        : "unknown";
+
+    marketComparison = {
+      area: safeStr(mcRaw.area, ""),
+      expectedRange: {
+        low: safeStr(mcRaw?.expectedRange?.low, "—"),
+        mid: safeStr(mcRaw?.expectedRange?.mid, "—"),
+        high: safeStr(mcRaw?.expectedRange?.high, "—"),
+      },
+      verdict,
+      notes: asArray(mcRaw.notes),
+      disclaimer: safeStr(mcRaw.disclaimer, ""),
+      bidTotal: safeStr(mcRaw.bidTotal, "") || undefined,
+      assumptions: asArray(mcRaw.assumptions),
+      confidence:
+        mcRaw.confidence === "low" || mcRaw.confidence === "medium" || mcRaw.confidence === "high"
+          ? mcRaw.confidence
+          : undefined,
+    };
+  }
+
+  const hasAny =
+    deeperIssues.length ||
+    paymentScheduleNotes.length ||
+    contractWarnings.length ||
+    negotiationTips.length ||
+    Boolean(pdfSummary) ||
+    Boolean(marketComparison);
+
+  if (!hasAny) return null;
+
+  return {
+    deeperIssues,
+    paymentScheduleNotes,
+    contractWarnings,
+    negotiationTips,
+    pdfSummary,
+    marketComparison,
+  };
+}
+
+type Ctx = {
+  pdfDoc: PDFDocument;
+  font: any;
+  fontBold: any;
+  fontMono: any;
+  icon?: any;
   page: any;
-  title: string;
-  bullets: string[];
+  pageNumber: number;
   left: number;
   right: number;
-  y: number;
-  fontBold: any;
-  font: any;
-}) {
-  const { page, title, bullets, left, right, fontBold, font } = opts;
+  top: number;
+  bottom: number;
+};
 
-  let y = opts.y;
-  const titleSize = 12;
+function drawHeader(ctx: Ctx, title: string, reportId: string) {
+  const { left, right, top, fontBold, font, icon } = ctx;
+
+  ctx.page.drawRectangle({
+    x: 0,
+    y: top - 64,
+    width: 612,
+    height: 64,
+    color: rgb(0.98, 0.98, 0.985),
+  });
+
+  if (icon) {
+    ctx.page.drawImage(icon, {
+      x: left,
+      y: top - 52,
+      width: 28,
+      height: 28,
+    });
+  }
+
+  ctx.page.drawText(sanitizeText(title), {
+    x: left + (icon ? 38 : 0),
+    y: top - 38,
+    size: 16,
+    font: fontBold,
+    color: rgb(0.1, 0.1, 0.1),
+  });
+
+  const idText = sanitizeText(`Report ID: ${reportId}`);
+  const idSize = 10;
+  const idWidth = font.widthOfTextAtSize(idText, idSize);
+  ctx.page.drawText(idText, {
+    x: Math.max(left, right - idWidth),
+    y: top - 36,
+    size: idSize,
+    font,
+    color: rgb(0.35, 0.35, 0.35),
+  });
+
+  // header separator
+  ctx.page.drawLine({
+    start: { x: left, y: top - 68 },
+    end: { x: right, y: top - 68 },
+    thickness: 1,
+    color: rgb(0.9, 0.9, 0.9),
+  });
+}
+
+function drawFooter(ctx: Ctx) {
+  const { left, right, bottom, font } = ctx;
+
+  ctx.page.drawLine({
+    start: { x: left, y: bottom + 26 },
+    end: { x: right, y: bottom + 26 },
+    thickness: 1,
+    color: rgb(0.92, 0.92, 0.92),
+  });
+
+  ctx.page.drawText(
+    sanitizeText(
+      "BuildGuide provides guidance, not a substitute for an on-site professional. Verify permits/codes with local officials."
+    ),
+    {
+      x: left,
+      y: bottom + 12,
+      size: 8.5,
+      font,
+      color: rgb(0.4, 0.4, 0.4),
+    }
+  );
+
+  ctx.page.drawText(sanitizeText(`Page ${ctx.pageNumber}`), {
+    x: right - 52,
+    y: bottom + 12,
+    size: 8.5,
+    font,
+    color: rgb(0.45, 0.45, 0.45),
+  });
+}
+
+function newPage(ctx: Ctx, title: string, reportId: string) {
+  ctx.pageNumber += 1;
+  ctx.page = ctx.pdfDoc.addPage([612, 792]);
+  drawHeader(ctx, title, reportId);
+  drawFooter(ctx);
+  return ctx.top - 104;
+}
+
+function ensureSpace(ctx: Ctx, y: number, needed: number, title: string, reportId: string) {
+  if (y - needed < ctx.bottom + 40) {
+    return newPage(ctx, title, reportId);
+  }
+  return y;
+}
+
+/**
+ * SECTION TITLE FIX:
+ * - More vertical spacing after title
+ * - Divider line pushed down so it never looks like it's "underlining" or striking through
+ */
+function drawSectionTitle(ctx: Ctx, y: number, title: string) {
+  const { left, right, fontBold } = ctx;
+
+  y -= 10;
+
+  ctx.page.drawText(sanitizeText(title), {
+    x: left,
+    y,
+    size: 12,
+    font: fontBold,
+    color: rgb(0.1, 0.1, 0.1),
+  });
+
+  // Divider line moved further down
+  ctx.page.drawLine({
+    start: { x: left, y: y - 14 },
+    end: { x: right, y: y - 14 },
+    thickness: 1,
+    color: rgb(0.93, 0.93, 0.93),
+  });
+
+  // More breathing room so content never collides with the divider
+  return y - 34;
+}
+
+/**
+ * IMPORTANT FIX:
+ * Do NOT destructure ctx.page into a local variable here.
+ * ensureSpace() may create a new page and update ctx.page, and we must draw on the CURRENT ctx.page.
+ */
+function drawBullets(ctx: Ctx, y: number, bullets: string[], title: string, reportId: string) {
+  const { left, right, font } = ctx;
+
   const bodySize = 10;
-  const maxWidth = right - left;
+  const lineH = 14;
+  const maxWidth = right - left - 14;
 
-  page.drawText(title, { x: left, y, size: titleSize, font: fontBold, color: rgb(0, 0, 0) });
-  y -= 16;
+  const list = bullets.length ? bullets : ["—"];
+  for (const b of list) {
+    y = ensureSpace(ctx, y, 26, title, reportId);
 
-  if (!bullets.length) {
-    y = drawWrappedText({
-      page,
-      text: "—",
+    ctx.page.drawText("-", {
       x: left,
       y,
-      maxWidth,
-      font,
       size: bodySize,
-      lineHeight: 14,
+      font,
       color: rgb(0.2, 0.2, 0.2),
     });
-    return y - 6;
+
+    const lines = wrapLines({ text: String(b), font, size: bodySize, maxWidth });
+    for (const ln of lines) {
+      y = ensureSpace(ctx, y, 18, title, reportId);
+
+      ctx.page.drawText(sanitizeText(ln), {
+        x: left + 14,
+        y,
+        size: bodySize,
+        font,
+        color: rgb(0.18, 0.18, 0.18),
+      });
+
+      y -= lineH;
+    }
+    y -= 2;
   }
 
-  for (const b of bullets.slice(0, 24)) {
-    const lineText = `• ${b}`;
-    y = drawWrappedText({
-      page,
-      text: lineText,
-      x: left,
-      y,
-      maxWidth,
-      font,
-      size: bodySize,
-      lineHeight: 14,
-      color: rgb(0.15, 0.15, 0.15),
-    });
-
-    if (y < 90) break;
-  }
-
-  return y - 6;
+  return y - 8;
 }
 
-function drawMarketSnapshot(opts: {
-  page: any;
-  left: number;
-  right: number;
-  y: number;
-  fontBold: any;
-  font: any;
-  market: MarketComparison;
-}) {
-  const { page, left, right, fontBold, font, market } = opts;
+/**
+ * IMPORTANT FIX:
+ * Same stale-page issue as drawBullets().
+ */
+function drawParagraph(ctx: Ctx, y: number, text: string, title: string, reportId: string) {
+  const { left, right, font } = ctx;
+  const size = 10;
+  const lineH = 14;
 
-  let y = opts.y;
+  const lines = wrapLines({ text, font, size, maxWidth: right - left });
+  for (const ln of lines) {
+    y = ensureSpace(ctx, y, 18, title, reportId);
 
-  // Section header
-  page.drawText("📊 Market Snapshot", { x: left, y, size: 12, font: fontBold, color: rgb(0, 0, 0) });
-  y -= 14;
+    ctx.page.drawText(sanitizeText(ln), {
+      x: left,
+      y,
+      size,
+      font,
+      color: rgb(0.18, 0.18, 0.18),
+    });
 
-  // Box
-  const boxHeight = 74;
-  page.drawRectangle({
+    y -= lineH;
+  }
+  return y - 8;
+}
+
+function parseMoneyToNumber(s?: string): number | null {
+  if (!s) return null;
+  const m = String(s).replace(/,/g, "").match(/(\d+(\.\d+)?)/);
+  if (!m) return null;
+  const n = Number(m[1]);
+  return Number.isFinite(n) ? n : null;
+}
+
+function verdictLabel(v: Verdict) {
+  switch (v) {
+    case "significantly_below_market":
+      return "Significantly below market (red flags)";
+    case "below_market":
+      return "Below typical (look closer)";
+    case "within_typical":
+      return "Within typical range";
+    case "above_market":
+      return "Above typical (may be overpriced)";
+    case "significantly_above_market":
+      return "Significantly above market (major red flags)";
+    default:
+      return "Unknown (needs more detail)";
+  }
+}
+
+function verdictShort(v: Verdict) {
+  switch (v) {
+    case "significantly_below_market":
+      return "LOW";
+    case "below_market":
+      return "LOW";
+    case "within_typical":
+      return "MID";
+    case "above_market":
+      return "HIGH";
+    case "significantly_above_market":
+      return "HIGH";
+    default:
+      return "—";
+  }
+}
+
+/**
+ * A small visual bar that shows Low | Mid | High and where the bid falls.
+ * (No fancy colors required—simple, clean, readable.)
+ */
+function drawRangeBar(ctx: Ctx, y: number, opts: { low: number; mid: number; high: number; bid?: number | null }) {
+  const { left, right, font, fontBold } = ctx;
+
+  const w = right - left;
+  const barH = 10;
+  const barY = y - 6;
+
+  ctx.page.drawRectangle({
     x: left,
-    y: y - boxHeight,
-    width: right - left,
-    height: boxHeight,
+    y: barY,
+    width: w,
+    height: barH,
     borderColor: rgb(0.85, 0.85, 0.85),
     borderWidth: 1,
     color: rgb(0.98, 0.98, 0.98),
   });
 
-  page.drawText(`Area: ${safeStr(market.area, "—")}`, { x: left + 12, y: y - 18, size: 10, font, color: rgb(0.2, 0.2, 0.2) });
-
-  const range = market.expectedRange ?? { low: "—", mid: "—", high: "—" };
-  page.drawText(
-    `Expected range: ${safeStr(range.low, "—")} · ${safeStr(range.mid, "—")} · ${safeStr(range.high, "—")}`,
-    { x: left + 12, y: y - 34, size: 10, font, color: rgb(0.2, 0.2, 0.2) }
-  );
-
-  page.drawText(`Verdict: ${verdictLabel(market.verdict)}`, {
-    x: left + 12,
-    y: y - 50,
-    size: 10,
-    font,
-    color: rgb(0.2, 0.2, 0.2),
+  // Segment dividers
+  ctx.page.drawLine({
+    start: { x: left + w / 3, y: barY },
+    end: { x: left + w / 3, y: barY + barH },
+    thickness: 1,
+    color: rgb(0.87, 0.87, 0.87),
+  });
+  ctx.page.drawLine({
+    start: { x: left + (2 * w) / 3, y: barY },
+    end: { x: left + (2 * w) / 3, y: barY + barH },
+    thickness: 1,
+    color: rgb(0.87, 0.87, 0.87),
   });
 
-  // Disclaimer (small)
-  page.drawText(safeStr(market.disclaimer, "This is a rough market snapshot. Exact pricing depends on scope and site conditions."), {
-    x: left + 12,
-    y: y - 64,
+  const labelY = barY - 14;
+  ctx.page.drawText("LOW", { x: left, y: labelY, size: 9, font: fontBold, color: rgb(0.35, 0.35, 0.35) });
+  ctx.page.drawText("MID", {
+    x: left + w / 2 - 10,
+    y: labelY,
     size: 9,
-    font,
+    font: fontBold,
+    color: rgb(0.35, 0.35, 0.35),
+  });
+  ctx.page.drawText("HIGH", {
+    x: right - 24,
+    y: labelY,
+    size: 9,
+    font: fontBold,
     color: rgb(0.35, 0.35, 0.35),
   });
 
-  y -= boxHeight + 10;
+  if (opts.bid && Number.isFinite(opts.bid) && opts.high > opts.low) {
+    const clamped = Math.max(opts.low * 0.5, Math.min(opts.bid, opts.high * 1.8));
+    const pct = (clamped - opts.low * 0.5) / (opts.high * 1.8 - opts.low * 0.5);
+    const x = left + pct * w;
 
-  // Notes (bullets)
-  const notes = asArray(market.notes);
-  if (notes.length) {
-    y = drawSection({
-      page,
-      title: "Market notes (why pricing moves)",
-      bullets: notes,
-      left,
-      right,
-      y,
-      fontBold,
+    ctx.page.drawLine({
+      start: { x, y: barY - 2 },
+      end: { x, y: barY + barH + 2 },
+      thickness: 1,
+      color: rgb(0.25, 0.25, 0.25),
+    });
+
+    ctx.page.drawText("Bid", {
+      x: Math.min(Math.max(left, x - 10), right - 18),
+      y: barY + barH + 6,
+      size: 9,
       font,
+      color: rgb(0.25, 0.25, 0.25),
     });
   }
 
-  return y;
+  return y - 44;
 }
 
 export async function POST(req: Request) {
   try {
     const body = await req.json().catch(() => null);
 
-    const base: BidBase | null = body?.base ?? null;
-    const detail: BidDetailAI | null = body?.detail ?? null;
-
-    if (!base?.id) {
+    const baseNorm = normalizeBase(body?.base);
+    if (!baseNorm?.id) {
       return NextResponse.json({ error: "Missing base result." }, { status: 400 });
     }
 
-    // Normalize
-    const included = asArray((base as any).included);
-    const missing = asArray((base as any).missing);
-    const redFlags = asArray((base as any).redFlags);
-    const questions = asArray((base as any).questionsToAsk);
-    const typicalRange = (base as any).typicalRange ?? null;
+    const detailNorm = normalizeDetail(body?.detail);
 
-    const deeperIssues = asArray((detail as any)?.deeperIssues);
-    const paymentScheduleNotes = asArray((detail as any)?.paymentScheduleNotes);
-    const contractWarnings = asArray((detail as any)?.contractWarnings);
-    const negotiationTips = asArray((detail as any)?.negotiationTips);
-    const pdfSummary = safeStr((detail as any)?.pdfSummary, "");
-    const market = (detail as any)?.marketComparison ?? null;
-
-    // Create PDF
     const pdfDoc = await PDFDocument.create();
-    const page = pdfDoc.addPage([612, 792]); // US Letter
+    const page = pdfDoc.addPage([612, 792]);
+
     const font = await pdfDoc.embedFont(StandardFonts.Helvetica);
     const fontBold = await pdfDoc.embedFont(StandardFonts.HelveticaBold);
+    const fontMono = await pdfDoc.embedFont(StandardFonts.Courier);
 
-    const left = 48;
-    const right = 612 - 48;
-
-    // Header
-    page.drawText("BuildGuide — Bid Report", { x: left, y: 740, size: 18, font: fontBold });
-    page.drawText(`Report ID: ${base.id}`, { x: left, y: 718, size: 10, font, color: rgb(0.25, 0.25, 0.25) });
-
-    // Typical range box (optional)
-    let y = 690;
-    if (typicalRange?.low || typicalRange?.mid || typicalRange?.high) {
-      page.drawRectangle({
-        x: left,
-        y: y - 44,
-        width: right - left,
-        height: 44,
-        borderColor: rgb(0.85, 0.85, 0.85),
-        borderWidth: 1,
-        color: rgb(0.98, 0.98, 0.98),
-      });
-
-      page.drawText("Typical Price Range (from bid analysis)", { x: left + 12, y: y - 18, size: 11, font: fontBold });
-      const rangeText = `Low: ${safeStr(typicalRange.low)}   Mid: ${safeStr(typicalRange.mid)}   High: ${safeStr(typicalRange.high)}`;
-      page.drawText(rangeText, { x: left + 12, y: y - 34, size: 10, font, color: rgb(0.2, 0.2, 0.2) });
-
-      y -= 66;
+    let icon: any | undefined = undefined;
+    try {
+      const iconBytes = await readFile(tryReadIconPath());
+      icon = await pdfDoc.embedPng(iconBytes);
+    } catch {
+      icon = undefined;
     }
 
-    // ✅ Market snapshot (if provided)
-    if (market?.area || market?.expectedRange) {
-      y = drawMarketSnapshot({ page, left, right, y, fontBold, font, market });
+    const ctx: Ctx = {
+      pdfDoc,
+      font,
+      fontBold,
+      fontMono,
+      icon,
+      page,
+      pageNumber: 1,
+      left: 48,
+      right: 612 - 48,
+      top: 792 - 40,
+      bottom: 40,
+    };
+
+    const title = "BuildGuide - Bid Report";
+    drawHeader(ctx, title, baseNorm.id);
+    drawFooter(ctx);
+
+    let y = ctx.top - 104;
+
+    // Metadata card
+    y = ensureSpace(ctx, y, 96, title, baseNorm.id);
+    ctx.page.drawRectangle({
+      x: ctx.left,
+      y: y - 66,
+      width: ctx.right - ctx.left,
+      height: 66,
+      color: rgb(1, 1, 1),
+      borderColor: rgb(0.9, 0.9, 0.9),
+      borderWidth: 1,
+    });
+
+    const generated = new Date().toISOString().replace("T", " ").slice(0, 19) + " UTC";
+
+    ctx.page.drawText("Bid Summary", {
+      x: ctx.left + 14,
+      y: y - 20,
+      size: 12,
+      font: ctx.fontBold,
+      color: rgb(0.12, 0.12, 0.12),
+    });
+
+    ctx.page.drawText(sanitizeText(`Generated: ${generated}`), {
+      x: ctx.left + 14,
+      y: y - 42,
+      size: 9,
+      font: ctx.font,
+      color: rgb(0.45, 0.45, 0.45),
+    });
+
+    y -= 96;
+
+    // Paid detail at the top if present
+    if (detailNorm?.marketComparison) {
+      const mc = detailNorm.marketComparison;
+
+      y = drawSectionTitle(ctx, y, "Local Price Reality Check");
+      y = drawParagraph(ctx, y, `Area: ${mc.area}`, title, baseNorm.id);
+
+      const conf = mc.confidence ? ` (confidence: ${mc.confidence})` : "";
+      if (mc.bidTotal) {
+        y = drawParagraph(ctx, y, `Bid total detected: ${mc.bidTotal}${conf}`, title, baseNorm.id);
+      } else {
+        y = drawParagraph(ctx, y, `Bid total detected: Unknown${conf}`, title, baseNorm.id);
+      }
+
+      y = drawParagraph(
+        ctx,
+        y,
+        `Expected range: Low ${mc.expectedRange.low}   Mid ${mc.expectedRange.mid}   High ${mc.expectedRange.high}`,
+        title,
+        baseNorm.id
+      );
+
+      const lowN = parseMoneyToNumber(mc.expectedRange.low);
+      const midN = parseMoneyToNumber(mc.expectedRange.mid);
+      const highN = parseMoneyToNumber(mc.expectedRange.high);
+      const bidN = parseMoneyToNumber(mc.bidTotal);
+
+      if (lowN && midN && highN) {
+        y = ensureSpace(ctx, y, 58, title, baseNorm.id);
+        y = drawRangeBar(ctx, y, { low: lowN, mid: midN, high: highN, bid: bidN });
+      }
+
+      y = drawParagraph(
+        ctx,
+        y,
+        `Verdict: ${verdictLabel(mc.verdict)} (sits: ${verdictShort(mc.verdict)})`,
+        title,
+        baseNorm.id
+      );
+
+      if (mc.notes?.length) {
+        y = drawBullets(ctx, y, mc.notes, title, baseNorm.id);
+      }
+
+      if (mc.assumptions?.length) {
+        y = drawSectionTitle(ctx, y, "Assumptions Used");
+        y = drawBullets(ctx, y, mc.assumptions, title, baseNorm.id);
+      }
+
+      if (mc.disclaimer) {
+        y = drawParagraph(ctx, y, mc.disclaimer, title, baseNorm.id);
+      }
     }
 
     // Base sections
-    y = drawSection({ page, title: "✅ Clearly Included", bullets: included, left, right, y, fontBold, font });
-    y = drawSection({ page, title: "⚠️ Missing / Common Scope Gaps", bullets: missing, left, right, y, fontBold, font });
-    y = drawSection({ page, title: "🚩 Red Flags", bullets: redFlags, left, right, y, fontBold, font });
-    y = drawSection({ page, title: "❓ Questions To Ask Before Signing", bullets: questions, left, right, y, fontBold, font });
+    y = drawSectionTitle(ctx, y, "What's Included");
+    y = drawBullets(ctx, y, baseNorm.included, title, baseNorm.id);
 
-    // Detail sections (optional — when you pass detail)
-    if (deeperIssues.length) {
-      y = drawSection({ page, title: "🔎 Deeper Issues (AI)", bullets: deeperIssues, left, right, y, fontBold, font });
-    }
-    if (paymentScheduleNotes.length) {
-      y = drawSection({ page, title: "💳 Payment Schedule Notes (AI)", bullets: paymentScheduleNotes, left, right, y, fontBold, font });
-    }
-    if (contractWarnings.length) {
-      y = drawSection({ page, title: "🧾 Contract Warnings (AI)", bullets: contractWarnings, left, right, y, fontBold, font });
-    }
-    if (negotiationTips.length) {
-      y = drawSection({ page, title: "🤝 Negotiation Tips (AI)", bullets: negotiationTips, left, right, y, fontBold, font });
+    y = drawSectionTitle(ctx, y, "What's Missing");
+    y = drawBullets(ctx, y, baseNorm.missing, title, baseNorm.id);
+
+    y = drawSectionTitle(ctx, y, "Red Flags");
+    y = drawBullets(ctx, y, baseNorm.redFlags, title, baseNorm.id);
+
+    // Paid sections if present
+    if (detailNorm) {
+      if (detailNorm.deeperIssues.length) {
+        y = drawSectionTitle(ctx, y, "Deeper Issues");
+        y = drawBullets(ctx, y, detailNorm.deeperIssues, title, baseNorm.id);
+      }
+
+      if (detailNorm.paymentScheduleNotes.length) {
+        y = drawSectionTitle(ctx, y, "Payment Schedule Notes");
+        y = drawBullets(ctx, y, detailNorm.paymentScheduleNotes, title, baseNorm.id);
+      }
+
+      if (detailNorm.contractWarnings.length) {
+        y = drawSectionTitle(ctx, y, "Contract Warnings");
+        y = drawBullets(ctx, y, detailNorm.contractWarnings, title, baseNorm.id);
+      }
+
+      if (detailNorm.negotiationTips.length) {
+        y = drawSectionTitle(ctx, y, "Negotiation Tips");
+        y = drawBullets(ctx, y, detailNorm.negotiationTips, title, baseNorm.id);
+      }
+
+      if (detailNorm.pdfSummary) {
+        y = drawSectionTitle(ctx, y, "PDF-ready Summary");
+
+        const lines = wrapLines({
+          text: detailNorm.pdfSummary,
+          font: ctx.fontMono,
+          size: 9.5,
+          maxWidth: ctx.right - ctx.left,
+        });
+
+        for (const ln of lines.slice(0, 240)) {
+          y = ensureSpace(ctx, y, 16, title, baseNorm.id);
+
+          ctx.page.drawText(sanitizeText(ln), {
+            x: ctx.left,
+            y,
+            size: 9.5,
+            font: ctx.fontMono,
+            color: rgb(0.18, 0.18, 0.18),
+          });
+
+          y -= 13;
+        }
+        y -= 6;
+      }
+    } else {
+      // Free-only: include suggested questions
+      if (baseNorm.questionsToAsk.length) {
+        y = drawSectionTitle(ctx, y, "Suggested Questions");
+        y = drawBullets(ctx, y, baseNorm.questionsToAsk, title, baseNorm.id);
+      }
     }
 
-    // PDF summary (optional)
-    if (pdfSummary) {
-      page.drawText("Summary", { x: left, y: Math.max(y, 90), size: 12, font: fontBold });
-      y -= 16;
-      y = drawWrappedText({
-        page,
-        text: pdfSummary,
-        x: left,
-        y,
-        maxWidth: right - left,
-        font,
-        size: 10,
-        lineHeight: 14,
-        color: rgb(0.15, 0.15, 0.15),
-      });
-    }
-
-    // Footer
-    page.drawLine({ start: { x: left, y: 62 }, end: { x: right, y: 62 }, thickness: 1, color: rgb(0.9, 0.9, 0.9) });
-    page.drawText("BuildGuide provides guidance, not legal advice. Verify permits/codes with local officials.", {
-      x: left,
-      y: 48,
-      size: 9,
-      font,
-      color: rgb(0.35, 0.35, 0.35),
-    });
-
-    // ✅ Fix for TS BlobPart issues:
     const bytes = (await pdfDoc.save()) as Uint8Array;
-
     const arrayBuffer = bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength) as ArrayBuffer;
-
     const blob = new Blob([arrayBuffer], { type: "application/pdf" });
 
     return new NextResponse(blob, {
       headers: {
         "Content-Type": "application/pdf",
-        "Content-Disposition": `attachment; filename="BuildGuide-Bid-${base.id}.pdf"`,
+        "Content-Disposition": `attachment; filename="BuildGuide-BidReport-${baseNorm.id}.pdf"`,
       },
     });
   } catch (err: any) {

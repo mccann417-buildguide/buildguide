@@ -1,0 +1,21 @@
+// prisma/schema.prisma
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  // ⚠️ IMPORTANT:
+  // The database URL is now defined in prisma.config.ts (Prisma v7+)
+}
+
+/*
+  You can add models later.
+  This minimal schema is VALID and WILL migrate.
+*/
+
+model Example {
+  id        String   @id @default(cuid())
+  createdAt DateTime @default(now())
+}

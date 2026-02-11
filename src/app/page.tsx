@@ -8,17 +8,28 @@ import { SiteHeader } from "./components/SiteHeader";
 import { Section } from "./components/Section";
 import { FeatureCard } from "./components/FeatureCard";
 import { TestimonialCard } from "./components/TestimonialCard";
-import { PricingCard } from "./components/PricingCard";
 
 export default function HomePage() {
-  function downloadIcon() {
-    const url = "/icons/icon-192.png";
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = "buildguide-icon-192.png";
-    document.body.appendChild(a);
-    a.click();
-    a.remove();
+  const [showInstallHelp, setShowInstallHelp] = React.useState(false);
+  const deferredPrompt = React.useRef<any>(null);
+
+  // Capture Android install prompt (PWA)
+  React.useEffect(() => {
+    const handler = (e: any) => {
+      e.preventDefault();
+      deferredPrompt.current = e;
+    };
+    window.addEventListener("beforeinstallprompt", handler);
+    return () => window.removeEventListener("beforeinstallprompt", handler);
+  }, []);
+
+  async function handleAddToHome() {
+    if (deferredPrompt.current) {
+      deferredPrompt.current.prompt();
+      deferredPrompt.current = null;
+      return;
+    }
+    setShowInstallHelp(true);
   }
 
   return (
@@ -27,22 +38,20 @@ export default function HomePage() {
 
       {/* HERO */}
       <main className="mx-auto max-w-6xl px-6 py-14">
-        <div className="rounded-3xl border p-8 md:p-10 shadow-sm">
-          <div className="flex items-start justify-between gap-4">
-            <div>
+        <div className="rounded-3xl border p-6 md:p-10 shadow-sm">
+          <div className="flex flex-col md:flex-row items-start justify-between gap-6">
+            <div className="w-full">
               <div className="text-sm text-neutral-700">⭐⭐⭐⭐⭐ (4.9/5)</div>
 
               <h1 className="mt-3 text-3xl md:text-5xl font-semibold tracking-tight">
-                Your Second Set of Eyes on Every Construction Decision.
+                Know what you’re looking at — before you approve the job.
               </h1>
 
               <p className="mt-4 max-w-2xl text-neutral-700">
-                Upload a photo. Ask questions. Check your bid. Get clear,
-                plain-English guidance before mistakes happen — including a{" "}
-                <span className="font-semibold">
-                  Local Price Reality Check
-                </span>{" "}
-                so you know if the number is even in the ballpark.
+                Upload a photo. Ask questions. Check your bid. BuildGuide helps you
+                spot red flags, understand what’s missing, and see whether a bid
+                looks <span className="font-semibold">low, typical, or high</span>{" "}
+                for your area — before you commit.
               </p>
 
               <div className="mt-6 flex flex-col sm:flex-row gap-3">
@@ -67,24 +76,24 @@ export default function HomePage() {
                   📄 Check a Bid
                 </Link>
 
-                <Link
-                  href="#how-it-works"
+                <button
+                  onClick={handleAddToHome}
                   className="rounded-xl border px-5 py-3 text-sm font-medium hover:bg-neutral-50 text-center"
                 >
-                  See how it works
-                </Link>
+                  📲 Add to Home Screen
+                </button>
               </div>
             </div>
 
-            {/* ICON */}
-            <div className="shrink-0 w-full sm:w-[260px] rounded-2xl border p-4">
-              <div className="text-sm font-semibold">App Icon</div>
+            {/* APP CARD */}
+            <div className="shrink-0 w-full md:w-[280px] rounded-2xl border p-4 bg-neutral-50">
+              <div className="text-sm font-semibold">Use BuildGuide like an app</div>
               <div className="mt-1 text-xs text-neutral-600">
-                This is the BuildGuide icon used for install/shortcuts.
+                Add it to your Home Screen — no App Store required.
               </div>
 
               <div className="mt-3 flex items-center gap-3">
-                <div className="h-14 w-14 rounded-2xl border bg-neutral-50 overflow-hidden flex items-center justify-center">
+                <div className="h-14 w-14 rounded-2xl border bg-white overflow-hidden flex items-center justify-center">
                   <Image
                     src="/icons/icon-192.png"
                     alt="BuildGuide App Icon"
@@ -96,19 +105,20 @@ export default function HomePage() {
 
                 <div className="flex-1">
                   <button
-                    onClick={downloadIcon}
-                    className="w-full rounded-xl bg-black text-white px-3 py-2 text-xs font-medium hover:bg-black/90 inline-flex items-center justify-center gap-2"
+                    onClick={handleAddToHome}
+                    className="w-full rounded-xl bg-black text-white px-3 py-2 text-xs font-medium hover:bg-black/90 inline-flex items-center justify-center"
                   >
-                    Download Icon
+                    Add to Home Screen
                   </button>
 
                   <div className="mt-2 text-[11px] text-neutral-500">
-                    File:{" "}
-                    <span className="font-mono">
-                      /public/icons/icon-192.png
-                    </span>
+                    Icon file: <span className="font-mono">/public/icons/icon-192.png</span>
                   </div>
                 </div>
+              </div>
+
+              <div className="mt-3 text-[11px] text-neutral-500">
+                Tip: On iPhone, open in Safari → Share → Add to Home Screen.
               </div>
             </div>
           </div>
@@ -117,21 +127,21 @@ export default function HomePage() {
             <div className="rounded-2xl border p-4">
               <div className="font-semibold">Verify</div>
               <div className="text-neutral-700 mt-1">
-                Photo check for problems, missing steps, and risks.
+                Photo checks for problems, missing steps, and risk.
               </div>
             </div>
 
             <div className="rounded-2xl border p-4">
               <div className="font-semibold">Understand</div>
               <div className="text-neutral-700 mt-1">
-                Ask follow-ups in plain English — no jargon.
+                Plain-English explanations and what actually matters.
               </div>
             </div>
 
             <div className="rounded-2xl border p-4">
               <div className="font-semibold">Decide</div>
               <div className="text-neutral-700 mt-1">
-                Bid check + local price reality check.
+                Bid check + where the price stands locally.
               </div>
             </div>
           </div>
@@ -148,7 +158,7 @@ export default function HomePage() {
         <div className="grid md:grid-cols-3 gap-4">
           <FeatureCard
             title="1) Verify (Photo Check)"
-            desc="Upload a photo and get structured feedback."
+            desc="Get a clear read on what you’re looking at."
             bullets={[
               "What looks right vs wrong",
               "What may be missing",
@@ -159,7 +169,7 @@ export default function HomePage() {
 
           <FeatureCard
             title="2) Understand (Ask Questions)"
-            desc="Plain-English explanations with context."
+            desc="Context and explanations that make sense."
             bullets={[
               "Step-by-step guidance",
               "What happens if it’s wrong",
@@ -169,12 +179,12 @@ export default function HomePage() {
           />
 
           <FeatureCard
-            title="3) Decide (Bid Check)"
-            desc="See gaps, red flags, and local price reality."
+            title="3) Decide (Bid & Price Check)"
+            desc="See what’s included, what’s missing, and where the price stands locally."
             bullets={[
-              "Missing scope",
-              "Red flags",
-              "Typical ranges",
+              "What’s missing",
+              "Risk flags",
+              "Where the price stands locally",
               "What to ask before signing",
             ]}
           />
@@ -182,18 +192,13 @@ export default function HomePage() {
       </Section>
 
       {/* TESTIMONIALS */}
-      <Section
-        id="testimonials"
-        eyebrow="Reviews"
-        title="Trusted by homeowners and contractors"
-      >
+      <Section id="testimonials" eyebrow="Reviews" title="Trusted by homeowners and contractors">
         <div className="grid md:grid-cols-2 gap-4">
           <TestimonialCard
             name="Ron G."
             role="Homeowner"
             quote="BuildGuide didn’t tell me who to hire — it showed me what each bid actually included, which made the decision obvious."
           />
-
           <TestimonialCard
             name="Chad L."
             role="Contractor"
@@ -210,8 +215,8 @@ export default function HomePage() {
           </h2>
 
           <p className="mt-3 text-neutral-700 max-w-2xl">
-            BuildGuide is your second set of eyes — from photos, to questions, to
-            bids.
+            BuildGuide is your second set of eyes — from photos, to questions,
+            to bids.
           </p>
 
           <div className="mt-6 flex flex-col sm:flex-row gap-3">
@@ -235,6 +240,13 @@ export default function HomePage() {
             >
               📄 Check a Bid
             </Link>
+
+            <button
+              onClick={handleAddToHome}
+              className="rounded-xl border px-5 py-3 text-sm font-medium hover:bg-neutral-50 text-center"
+            >
+              📲 Add to Home Screen
+            </button>
           </div>
         </div>
       </section>
@@ -244,6 +256,28 @@ export default function HomePage() {
           © {new Date().getFullYear()} BuildGuide. All rights reserved.
         </div>
       </footer>
+
+      {/* iOS INSTALL HELP */}
+      {showInstallHelp && (
+        <div className="fixed inset-0 z-50 bg-black/50 flex items-end sm:items-center justify-center p-4">
+          <div className="bg-white rounded-2xl p-5 max-w-sm w-full">
+            <div className="font-semibold text-lg">
+              Add BuildGuide to Home Screen
+            </div>
+            <p className="mt-2 text-sm text-neutral-700">
+              On iPhone: open this site in <strong>Safari</strong>, tap the{" "}
+              <strong>Share</strong> icon, then choose{" "}
+              <strong>Add to Home Screen</strong>.
+            </p>
+            <button
+              onClick={() => setShowInstallHelp(false)}
+              className="mt-4 w-full rounded-xl border px-4 py-2 text-sm hover:bg-neutral-50"
+            >
+              Got it
+            </button>
+          </div>
+        </div>
+      )}
     </>
   );
 }
