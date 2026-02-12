@@ -5,6 +5,29 @@
 import React from "react";
 import { buildFreePhotoSummary, buildPaidPhotoReport, PhotoSeverity } from "../lib/photoLogic";
 
+type FreeSummary = {
+  severity: PhotoSeverity;
+  title: string;
+  summary: string;
+  upsell: string;
+};
+
+type PaidReport = {
+  whatYoureLookingAt: {
+    label: string;
+    confidence: string;
+    details: string[];
+  };
+  redFlags: {
+    flag: string;
+    severity: PhotoSeverity;
+    whyItMatters: string;
+  }[];
+  nextSteps: string[];
+  costDrivers: string[];
+  contractorQuestions: string[];
+};
+
 function toneClasses(sev: PhotoSeverity) {
   switch (sev) {
     case "red":
@@ -18,15 +41,52 @@ function toneClasses(sev: PhotoSeverity) {
   }
 }
 
+const FREE_FALLBACK: FreeSummary = {
+  // If your PhotoSeverity type does NOT include "unknown", change this to "yellow".
+  severity: "unknown" as PhotoSeverity,
+  title: "Quick photo read",
+  summary: "We generated a quick preview. Unlock the full report for deeper details.",
+  upsell: "Unlock to see what’s missing, what’s risky, and what to do next.",
+};
+
+const PAID_FALLBACK: PaidReport = {
+  whatYoureLookingAt: { label: "N/A", confidence: "N/A", details: [] },
+  redFlags: [],
+  nextSteps: [],
+  costDrivers: [],
+  contractorQuestions: [],
+};
+
 export default function PhotoReport({
   isPaid,
-  severity = "unknown",
+  severity = ("unknown" as PhotoSeverity),
 }: {
   isPaid: boolean;
   severity?: PhotoSeverity;
 }) {
-  const free = buildFreePhotoSummary({ severity });
-  const paid = buildPaidPhotoReport({ severity });
+  // Build outputs (then normalize to known shapes)
+  const freeRaw = buildFreePhotoSummary(severity) as Partial<FreeSummary> | undefined;
+  const paidRaw = buildPaidPhotoReport(severity) as Partial<PaidReport> | undefined;
+
+  const free: FreeSummary = {
+    ...FREE_FALLBACK,
+    ...(freeRaw ?? {}),
+    severity: (freeRaw?.severity ?? FREE_FALLBACK.severity) as PhotoSeverity,
+  };
+
+  const paid: PaidReport = {
+    ...PAID_FALLBACK,
+    ...(paidRaw ?? {}),
+    whatYoureLookingAt: {
+      ...PAID_FALLBACK.whatYoureLookingAt,
+      ...(paidRaw?.whatYoureLookingAt ?? {}),
+      details: paidRaw?.whatYoureLookingAt?.details ?? [],
+    },
+    redFlags: paidRaw?.redFlags ?? [],
+    nextSteps: paidRaw?.nextSteps ?? [],
+    costDrivers: paidRaw?.costDrivers ?? [],
+    contractorQuestions: paidRaw?.contractorQuestions ?? [],
+  };
 
   return (
     <div className="rounded-xl border bg-white p-5 shadow-sm">
@@ -35,75 +95,91 @@ export default function PhotoReport({
         <div className="text-sm text-gray-500">A fast read now — deeper report when unlocked.</div>
       </div>
 
-      {/* FREE: no deep detail */}
+      {/* FREE */}
       {!isPaid && (
         <div className="mt-4">
           <div className={`font-semibold ${toneClasses(free.severity)}`}>{free.title}</div>
           <div className="mt-1 text-sm text-gray-700">{free.summary}</div>
-
-          <div className="mt-4 border-t pt-3 text-sm text-gray-600">
-            {free.upsell}
-          </div>
+          <div className="mt-2 text-sm text-blue-600">{free.upsell}</div>
         </div>
       )}
 
-      {/* PAID: deep structure */}
+      {/* PAID */}
       {isPaid && (
-        <div className="mt-4 space-y-4">
-          <div className="rounded-lg border p-3">
-            <div className="font-semibold text-gray-900">What you’re looking at</div>
+        <div className="mt-5 space-y-5">
+          {/* What you're looking at */}
+          <div className="rounded-lg border bg-gray-50 p-4">
+            <div className="text-sm font-semibold text-gray-900">What you’re looking at</div>
             <div className="mt-1 text-sm text-gray-700">
-              {paid.whatYoureLookingAt.label}{" "}
-              <span className="text-gray-500">
-                (confidence: {paid.whatYoureLookingAt.confidence})
-              </span>
+              <span className="font-semibold">{paid.whatYoureLookingAt.label}</span>{" "}
+              <span className="text-gray-500">({paid.whatYoureLookingAt.confidence})</span>
             </div>
-            <ul className="mt-2 list-disc pl-5 text-sm text-gray-700 space-y-1">
-              {paid.whatYoureLookingAt.details.map((d) => (
-                <li key={d}>{d}</li>
-              ))}
-            </ul>
-          </div>
-
-          {paid.redFlags.length > 0 && (
-            <div className="rounded-lg border p-3">
-              <div className="font-semibold text-gray-900">Red flags</div>
-              <ul className="mt-2 space-y-2">
-                {paid.redFlags.map((rf) => (
-                  <li key={rf.flag} className="text-sm">
-                    <div className={`font-semibold ${toneClasses(rf.severity)}`}>{rf.flag}</div>
-                    <div className="text-gray-700">{rf.whyItMatters}</div>
-                  </li>
+            {paid.whatYoureLookingAt.details?.length > 0 && (
+              <ul className="mt-2 list-disc space-y-1 pl-5 text-sm text-gray-700">
+                {paid.whatYoureLookingAt.details.map((d, i) => (
+                  <li key={i}>{d}</li>
                 ))}
               </ul>
-            </div>
-          )}
-
-          <div className="rounded-lg border p-3">
-            <div className="font-semibold text-gray-900">What’s next</div>
-            <ul className="mt-2 list-disc pl-5 text-sm text-gray-700 space-y-1">
-              {paid.nextSteps.map((x) => (
-                <li key={x}>{x}</li>
-              ))}
-            </ul>
+            )}
           </div>
 
-          <div className="rounded-lg border p-3">
-            <div className="font-semibold text-gray-900">Why it costs what it costs</div>
-            <ul className="mt-2 list-disc pl-5 text-sm text-gray-700 space-y-1">
-              {paid.costDrivers.map((x) => (
-                <li key={x}>{x}</li>
-              ))}
-            </ul>
+          {/* Red flags */}
+          <div className="rounded-lg border bg-gray-50 p-4">
+            <div className="text-sm font-semibold text-gray-900">Possible concerns</div>
+            {paid.redFlags?.length ? (
+              <div className="mt-2 space-y-3">
+                {paid.redFlags.map((rf, i) => (
+                  <div key={i} className="rounded-md border bg-white p-3">
+                    <div className={`text-sm font-semibold ${toneClasses(rf.severity)}`}>{rf.flag}</div>
+                    <div className="mt-1 text-sm text-gray-700">{rf.whyItMatters}</div>
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <div className="mt-2 text-sm text-gray-600">No major red flags detected.</div>
+            )}
           </div>
 
-          <div className="rounded-lg border p-3">
-            <div className="font-semibold text-gray-900">What to ask the contractor</div>
-            <ul className="mt-2 list-disc pl-5 text-sm text-gray-700 space-y-1">
-              {paid.contractorQuestions.map((x) => (
-                <li key={x}>{x}</li>
-              ))}
-            </ul>
+          {/* Next steps */}
+          <div className="rounded-lg border bg-gray-50 p-4">
+            <div className="text-sm font-semibold text-gray-900">Next steps</div>
+            {paid.nextSteps?.length ? (
+              <ul className="mt-2 list-disc space-y-1 pl-5 text-sm text-gray-700">
+                {paid.nextSteps.map((s, i) => (
+                  <li key={i}>{s}</li>
+                ))}
+              </ul>
+            ) : (
+              <div className="mt-2 text-sm text-gray-600">No specific next steps provided.</div>
+            )}
+          </div>
+
+          {/* Cost drivers */}
+          <div className="rounded-lg border bg-gray-50 p-4">
+            <div className="text-sm font-semibold text-gray-900">Cost drivers</div>
+            {paid.costDrivers?.length ? (
+              <ul className="mt-2 list-disc space-y-1 pl-5 text-sm text-gray-700">
+                {paid.costDrivers.map((c, i) => (
+                  <li key={i}>{c}</li>
+                ))}
+              </ul>
+            ) : (
+              <div className="mt-2 text-sm text-gray-600">No cost drivers listed.</div>
+            )}
+          </div>
+
+          {/* Contractor questions */}
+          <div className="rounded-lg border bg-gray-50 p-4">
+            <div className="text-sm font-semibold text-gray-900">Questions to ask the contractor</div>
+            {paid.contractorQuestions?.length ? (
+              <ul className="mt-2 list-disc space-y-1 pl-5 text-sm text-gray-700">
+                {paid.contractorQuestions.map((q, i) => (
+                  <li key={i}>{q}</li>
+                ))}
+              </ul>
+            ) : (
+              <div className="mt-2 text-sm text-gray-600">No contractor questions provided.</div>
+            )}
           </div>
         </div>
       )}
