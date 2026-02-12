@@ -3,7 +3,7 @@
 
 export const dynamic = "force-dynamic";
 
-import React from "react";
+import React, { Suspense } from "react";
 import { useSearchParams } from "next/navigation";
 
 type BidAnalysisResult = {
@@ -44,20 +44,14 @@ function safeParse<T>(raw: string | null): T | null {
   }
 }
 
-export default function BidPrintPage() {
+function BidPrintInner() {
   const sp = useSearchParams();
-
-  // Prevent any browser-only stuff from running during build / before hydration.
-  const [mounted, setMounted] = React.useState(false);
-  React.useEffect(() => setMounted(true), []);
-
-  const rid = mounted ? sp.get("resultId") ?? "" : "";
+  const rid = sp.get("resultId") ?? "";
 
   const [base, setBase] = React.useState<BidAnalysisResult | null>(null);
   const [detail, setDetail] = React.useState<BidDetailAI | null>(null);
 
   React.useEffect(() => {
-    if (!mounted) return;
     if (!rid) return;
 
     const b = safeParse<BidAnalysisResult>(localStorage.getItem(baseKey(rid)));
@@ -67,10 +61,7 @@ export default function BidPrintPage() {
 
     // Auto-print if you want:
     // setTimeout(() => window.print(), 300);
-  }, [mounted, rid]);
-
-  // While mounting/hydrating on client
-  if (!mounted) return <div className="p-8">Loading…</div>;
+  }, [rid]);
 
   if (!rid) return <div className="p-8">Missing resultId.</div>;
 
@@ -90,8 +81,8 @@ export default function BidPrintPage() {
         <div className="rounded border p-4 text-sm">
           No saved report found for this resultId on this device.
           <div className="mt-2 text-neutral-600">
-            (MVP note: this print page reads localStorage. If you need cross-device printing, we’ll store reports on
-            the server.)
+            (MVP note: this print page reads localStorage. If you need cross-device printing, we’ll store reports on the
+            server.)
           </div>
         </div>
       ) : (
@@ -196,5 +187,13 @@ export default function BidPrintPage() {
         </>
       )}
     </main>
+  );
+}
+
+export default function BidPrintPage() {
+  return (
+    <Suspense fallback={<div className="p-8">Loading…</div>}>
+      <BidPrintInner />
+    </Suspense>
   );
 }
