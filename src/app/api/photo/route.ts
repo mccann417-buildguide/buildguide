@@ -11,17 +11,36 @@ function safeStr(v: any, fb = "") {
   return typeof v === "string" ? v : fb;
 }
 
+// Convert an uploaded File (Blob) to a base64 data URL (data:image/jpeg;base64,...)
+async function fileToDataUrl(file: File): Promise<string> {
+  const ab = await file.arrayBuffer();
+  const buf = Buffer.from(ab);
+  const base64 = buf.toString("base64");
+  const mime = file.type || "image/jpeg";
+  return `data:${mime};base64,${base64}`;
+}
+
 export async function POST(req: Request) {
   try {
     const openai = getOpenAI();
-    const body = await req.json().catch(() => null);
 
-    const imageDataUrl = body?.imageDataUrl as string | undefined;
-    const notes = (body?.notes as string | undefined)?.trim() || "";
+    // ✅ Expect multipart/form-data now (from the updated photo page)
+    const form = await req.formData();
+    const file = form.get("image");
+    const notes = (form.get("notes") ? String(form.get("notes")) : "").trim();
 
-    if (!imageDataUrl || !imageDataUrl.startsWith("data:image")) {
-      return NextResponse.json({ error: "Missing imageDataUrl (data URL)." }, { status: 400 });
+    if (!file || !(file instanceof File)) {
+      return NextResponse.json({ error: "Missing image file (field name: image)." }, { status: 400 });
     }
+
+    // Basic guardrails
+    const mime = file.type || "";
+    if (!mime.startsWith("image/")) {
+      return NextResponse.json({ error: "Uploaded file must be an image." }, { status: 400 });
+    }
+
+    // Convert to data URL for OpenAI image input
+    const imageDataUrl = await fileToDataUrl(file);
 
     const instructions =
       "You are BuildGuide Photo Check (free preview). " +
