@@ -148,12 +148,67 @@ function isPaidPlan(planId: string) {
   return planId === "home_plus" || planId === "contractor_pro" || planId === "project_pass_14d";
 }
 
+/**
+ * ✅ 413 Fix helper:
+ * Compress/resize the image before upload so Vercel doesn’t reject large payloads.
+ * Returns a JPEG Blob typically < ~300-900KB depending on photo.
+ */
+async function compressImageToJpegBlob(
+  file: File,
+  opts?: { maxWidth?: number; maxHeight?: number; quality?: number }
+): Promise<Blob> {
+  const maxWidth = opts?.maxWidth ?? 1400;
+  const maxHeight = opts?.maxHeight ?? 1400;
+  const quality = opts?.quality ?? 0.75;
+
+  const imgUrl = URL.createObjectURL(file);
+  try {
+    const img = await new Promise<HTMLImageElement>((resolve, reject) => {
+      const el = new Image();
+      el.onload = () => resolve(el);
+      el.onerror = (e) => reject(e);
+      el.src = imgUrl;
+    });
+
+    const ratio = Math.min(maxWidth / img.width, maxHeight / img.height, 1);
+    const w = Math.round(img.width * ratio);
+    const h = Math.round(img.height * ratio);
+
+    const canvas = document.createElement("canvas");
+    canvas.width = w;
+    canvas.height = h;
+
+    const ctx = canvas.getContext("2d");
+    if (!ctx) throw new Error("Canvas not supported");
+
+    ctx.drawImage(img, 0, 0, w, h);
+
+    const blob = await new Promise<Blob>((resolve, reject) => {
+      canvas.toBlob(
+        (b) => {
+          if (!b) reject(new Error("Image compression failed"));
+          else resolve(b);
+        },
+        "image/jpeg",
+        quality
+      );
+    });
+
+    return blob;
+  } finally {
+    URL.revokeObjectURL(imgUrl);
+  }
+}
+
 function PhotoPageInner(props: {
   remaining: number;
   planId: string;
 
   imageDataUrl: string | null;
   setImageDataUrl: React.Dispatch<React.SetStateAction<string | null>>;
+  pickedFile: File | null;
+  setPickedFile: React.Dispatch<React.SetStateAction<File | null>>;
+
   notes: string;
   setNotes: React.Dispatch<React.SetStateAction<string>>;
 
@@ -185,6 +240,8 @@ function PhotoPageInner(props: {
     planId,
     imageDataUrl,
     setImageDataUrl,
+    pickedFile,
+    setPickedFile,
     notes,
     setNotes,
     loading,
@@ -224,8 +281,11 @@ function PhotoPageInner(props: {
 
   async function onPickFile(file: File | null) {
     if (!file) return;
+
+    setPickedFile(file);
     setPickedName(file.name);
 
+    // Keep exact preview behavior (data URL)
     const reader = new FileReader();
     reader.onload = () => setImageDataUrl(String(reader.result));
     reader.readAsDataURL(file);
@@ -405,6 +465,7 @@ function PhotoPageInner(props: {
                 type="button"
                 onClick={() => {
                   setImageDataUrl(null);
+                  setPickedFile(null);
                   setPickedName("");
                 }}
                 className="sm:ml-auto rounded-xl border px-4 py-2.5 text-sm font-medium hover:bg-neutral-50"
@@ -486,7 +547,7 @@ function PhotoPageInner(props: {
 
           <button
             onClick={() => runPhotoAnalysis()}
-            disabled={!imageDataUrl || loading}
+            disabled={!pickedFile || loading}
             className="rounded-xl bg-black text-white px-5 py-3 text-sm font-medium disabled:opacity-50 hover:bg-black/90"
           >
             {loading ? "Analyzing..." : "Analyze Photo"}
@@ -501,6 +562,8 @@ function PhotoPageInner(props: {
 
 export default function PhotoPage() {
   const [imageDataUrl, setImageDataUrl] = React.useState<string | null>(null);
+  const [pickedFile, setPickedFile] = React.useState<File | null>(null);
+
   const [notes, setNotes] = React.useState("");
   const [loading, setLoading] = React.useState(false);
   const [result, setResult] = React.useState<PhotoAnalysisResult | null>(null);
@@ -524,6 +587,8 @@ export default function PhotoPage() {
 
   function resetForNewPhoto() {
     setImageDataUrl(null);
+    setPickedFile(null);
+
     setNotes("");
     setLoading(false);
     setResult(null);
@@ -615,21 +680,16 @@ export default function PhotoPage() {
           const vdata = await v.json().catch(() => null);
           const entitlement = vdata?.entitlement;
 
-          // ✅ Subscription (Home Plus)
           const subOk =
             v.ok &&
             vdata?.ok &&
             entitlement?.type === "subscription" &&
             (entitlement?.status === "active" || entitlement?.status === "trialing");
 
-          // ✅ Project Pass (14 days) – your verify route will likely return type="unknown" unless you add it;
-          // BUT pricing page is already setting plan in local storage. This block is fine as-is.
-
           if (subOk) {
             setPlan("home_plus" as PlanId);
             setUnlockToast("✅ Subscription confirmed — Home Plus is active.");
           } else {
-            // ✅ One-report PHOTO unlock only
             const onePhotoOk =
               v.ok && vdata?.ok && entitlement?.type === "one_report" && entitlement?.kind === "photo";
 
@@ -662,10 +722,24 @@ export default function PhotoPage() {
     setDetailError(null);
 
     try {
+      if (!pickedFile) {
+        throw new Error("Please choose a photo first.");
+      }
+
+      // ✅ Compress before upload to avoid 413
+      const jpgBlob = await compressImageToJpegBlob(pickedFile, {
+        maxWidth: 1400,
+        maxHeight: 1400,
+        quality: 0.75,
+      });
+
+      const fd = new FormData();
+      fd.append("image", new File([jpgBlob], "upload.jpg", { type: "image/jpeg" }));
+      if (notes.trim()) fd.append("notes", notes.trim());
+
       const res = await fetch("/api/photo", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ imageDataUrl, notes: notes.trim() || undefined }),
+        body: fd, // ✅ multipart/form-data
       });
 
       const data = await res.json().catch(() => null);
@@ -709,7 +783,6 @@ export default function PhotoPage() {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          // ✅ MUST be "plan" for your checkout route
           plan: "one_report_photo",
           resultId: targetResultId,
           successPath: returnPath,
@@ -771,6 +844,8 @@ export default function PhotoPage() {
           planId={gate.planId}
           imageDataUrl={imageDataUrl}
           setImageDataUrl={setImageDataUrl}
+          pickedFile={pickedFile}
+          setPickedFile={setPickedFile}
           notes={notes}
           setNotes={setNotes}
           loading={loading}

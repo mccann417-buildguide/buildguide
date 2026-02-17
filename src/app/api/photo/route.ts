@@ -4,11 +4,13 @@ import { getOpenAI } from "../../lib/openai";
 
 export const runtime = "nodejs";
 
-function safeArr(v: any, max = 5) {
-  return Array.isArray(v) ? v.filter(Boolean).map(String).slice(0, max) : [];
-}
+// Helpers
 function safeStr(v: any, fb = "") {
   return typeof v === "string" ? v : fb;
+}
+
+function safeArr(v: any, max = 5) {
+  return Array.isArray(v) ? v.filter(Boolean).map(String).slice(0, max) : [];
 }
 
 // Convert an uploaded File (Blob) to a base64 data URL (data:image/jpeg;base64,...)
@@ -24,7 +26,7 @@ export async function POST(req: Request) {
   try {
     const openai = getOpenAI();
 
-    // ✅ Expect multipart/form-data now (from the updated photo page)
+    // ✅ Expect multipart/form-data
     const form = await req.formData();
     const file = form.get("image");
     const notes = (form.get("notes") ? String(form.get("notes")) : "").trim();
@@ -33,13 +35,12 @@ export async function POST(req: Request) {
       return NextResponse.json({ error: "Missing image file (field name: image)." }, { status: 400 });
     }
 
-    // Basic guardrails
     const mime = file.type || "";
     if (!mime.startsWith("image/")) {
       return NextResponse.json({ error: "Uploaded file must be an image." }, { status: 400 });
     }
 
-    // Convert to data URL for OpenAI image input
+    // Convert to data URL for OpenAI image input (server-side)
     const imageDataUrl = await fileToDataUrl(file);
 
     const instructions =
