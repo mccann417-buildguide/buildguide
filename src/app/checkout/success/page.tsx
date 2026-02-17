@@ -1,7 +1,9 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import React, { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
+
+export const dynamic = "force-dynamic";
 
 type VerifyResponse = {
   ok: boolean;
@@ -13,12 +15,9 @@ type VerifyResponse = {
 };
 
 function setEntitlement(payload: VerifyResponse) {
-  // Minimal MVP: localStorage entitlements
-  // You can wire this into your existing FeatureGate logic.
   const now = Date.now();
 
   if (payload.plan === "one_report" && payload.kind && payload.resultId) {
-    // Unlock a single report
     localStorage.setItem(`bg_unlocked_${payload.kind}_${payload.resultId}`, "1");
   }
 
@@ -28,7 +27,6 @@ function setEntitlement(payload: VerifyResponse) {
   }
 
   if (payload.plan === "home_plus") {
-    // mark subscription active (MVP – later replace with real auth/webhook)
     localStorage.setItem("bg_home_plus_active", "1");
   }
 }
@@ -54,15 +52,15 @@ export default function CheckoutSuccessPage() {
         return;
       }
 
-      // write entitlements first
       setEntitlement(data);
 
-      // then redirect
       const dest =
         data.returnTo ||
-        (data.kind === "photo" ? `/photo?resultId=${data.resultId}` :
-        data.kind === "bid" ? `/bid?resultId=${data.resultId}` :
-        "/");
+        (data.kind === "photo"
+          ? `/photo?resultId=${data.resultId}`
+          : data.kind === "bid"
+            ? `/bid?resultId=${data.resultId}`
+            : "/");
 
       router.replace(dest);
     })();
@@ -72,9 +70,7 @@ export default function CheckoutSuccessPage() {
     <div style={{ padding: 24 }}>
       <h1 style={{ fontSize: 20, fontWeight: 700 }}>BuildGuide</h1>
       <p style={{ marginTop: 12 }}>{msg}</p>
-      <p style={{ marginTop: 12, opacity: 0.7 }}>
-        If this hangs, go back to Pricing and try again.
-      </p>
+      <p style={{ marginTop: 12, opacity: 0.7 }}>If this hangs, go back to Pricing and try again.</p>
     </div>
   );
 }

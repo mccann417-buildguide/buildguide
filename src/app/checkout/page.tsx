@@ -1,9 +1,11 @@
 "use client";
 
-import { useEffect } from "react";
+import React, { Suspense, useEffect } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 
-export default function CheckoutPage() {
+export const dynamic = "force-dynamic";
+
+function CheckoutInner() {
   const router = useRouter();
   const params = useSearchParams();
 
@@ -24,5 +26,20 @@ export default function CheckoutPage() {
       <h1 style={{ fontSize: 20, fontWeight: 700 }}>BuildGuide</h1>
       <p style={{ marginTop: 12 }}>Redirecting…</p>
     </div>
+  );
+}
+
+export default function CheckoutPage() {
+  return (
+    <Suspense
+      fallback={
+        <div style={{ padding: 24 }}>
+          <h1 style={{ fontSize: 20, fontWeight: 700 }}>BuildGuide</h1>
+          <p style={{ marginTop: 12 }}>Redirecting…</p>
+        </div>
+      }
+    >
+      <CheckoutInner />
+    </Suspense>
   );
 }
