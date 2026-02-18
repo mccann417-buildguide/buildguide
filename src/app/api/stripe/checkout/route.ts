@@ -32,7 +32,6 @@ type CheckoutBody = {
   successPath?: string;
   cancelPath?: string;
 
-  // optional metadata
   resultId?: string;
 };
 
@@ -54,18 +53,31 @@ function pickPriceId(body: CheckoutBody) {
   return null;
 }
 
+function pickMode(body: CheckoutBody): Stripe.Checkout.SessionCreateParams.Mode {
+  // ✅ Only Home Plus may be subscription
+  if (body.plan === "home_plus" || body.kind === "home_plus") return "subscription";
+
+  // ✅ Everything else MUST be a one-time payment checkout session
+  return "payment";
+}
+
 export async function POST(req: Request) {
   try {
     requireEnv("STRIPE_SECRET_KEY");
 
     const body = (await req.json().catch(() => ({}))) as CheckoutBody;
 
+    // Guard: require at least plan or kind
+    if (!body.plan && !body.kind) {
+      return NextResponse.json({ error: "Missing plan/kind in checkout request." }, { status: 400 });
+    }
+
     const priceId = pickPriceId(body);
     if (!priceId) {
       return NextResponse.json(
         {
           error:
-            `Missing priceId. Check .env.local:\n` +
+            `Missing priceId. Check env vars:\n` +
             `- STRIPE_ONE_REPORT_PHOTO_PRICE_ID\n` +
             `- STRIPE_ONE_REPORT_BID_PRICE_ID\n` +
             `- STRIPE_PROJECT_PASS_14D_PRICE_ID\n` +
@@ -81,10 +93,9 @@ export async function POST(req: Request) {
     const successPath = body.successPath ?? "/";
     const cancelPath = body.cancelPath ?? "/";
 
-    const isSubscription = body.plan === "home_plus" || body.kind === "home_plus";
-    const mode: Stripe.Checkout.SessionCreateParams.Mode = isSubscription ? "subscription" : "payment";
+    const mode = pickMode(body);
 
-    // ✅ ALWAYS append ?session_id=... so the app can call /api/stripe/verify
+    // Always append session_id for verify
     const successUrl = `${baseUrl}${successPath}${successPath.includes("?") ? "&" : "?"}session_id={CHECKOUT_SESSION_ID}`;
 
     const session = await stripe.checkout.sessions.create({
@@ -100,7 +111,17 @@ export async function POST(req: Request) {
       },
     });
 
-    return NextResponse.json({ url: session.url });
+    // ✅ return debug so you can see exactly what got created
+    return NextResponse.json({
+      url: session.url,
+      debug: {
+        sessionId: session.id,
+        mode,
+        priceId,
+        planReceived: body.plan ?? null,
+        kindReceived: body.kind ?? null,
+      },
+    });
   } catch (err: any) {
     return NextResponse.json({ error: err?.message ?? "Stripe checkout error" }, { status: 500 });
   }
