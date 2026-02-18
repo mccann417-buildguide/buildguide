@@ -41,6 +41,7 @@ type Entitlement =
   | {
       type: "unknown";
       message: string;
+      debug?: any;
     };
 
 async function verifySession(session_id: string) {
@@ -54,14 +55,34 @@ async function verifySession(session_id: string) {
   const resultId = (md.resultId || "").trim();
   const returnTo = (md.returnTo || "").trim();
 
-  // ✅ SUBSCRIPTION (Home Plus)
-  if (session.mode === "subscription") {
-    const sub = session.subscription as Stripe.Subscription | null;
+  const debug = {
+    mode: session.mode,
+    payment_status: session.payment_status,
+    metadata: { plan, kind, resultId, returnTo },
+    sessionId: session.id,
+  };
 
+  // ✅ SUBSCRIPTION MODE: ONLY allow Home Plus if metadata says Home Plus
+  if (session.mode === "subscription") {
+    const isHomePlus = plan === "home_plus" || kind === "home_plus";
+
+    if (!isHomePlus) {
+      return {
+        ok: true,
+        entitlement: {
+          type: "unknown",
+          message:
+            "Checkout is subscription-mode, but metadata does not indicate home_plus. Not granting subscription entitlement.",
+          debug,
+        } as Entitlement,
+      };
+    }
+
+    const sub = session.subscription as Stripe.Subscription | null;
     if (!sub) {
       return {
         ok: false,
-        entitlement: { type: "unknown", message: "No subscription found on session." } as Entitlement,
+        entitlement: { type: "unknown", message: "No subscription found on session.", debug } as Entitlement,
       };
     }
 
@@ -78,12 +99,28 @@ async function verifySession(session_id: string) {
     };
   }
 
-  // ✅ ONE-TIME PAYMENTS (one report OR project pass)
+  // ✅ PAYMENT MODE
   if (session.mode === "payment") {
     if (session.payment_status !== "paid") {
       return {
         ok: false,
-        entitlement: { type: "unknown", message: `Payment not completed: ${session.payment_status}` } as Entitlement,
+        entitlement: {
+          type: "unknown",
+          message: `Payment not completed: ${session.payment_status}`,
+          debug,
+        } as Entitlement,
+      };
+    }
+
+    // ✅ If someone somehow hit payment-mode but metadata says home_plus, DO NOT upgrade
+    if (plan === "home_plus" || kind === "home_plus") {
+      return {
+        ok: true,
+        entitlement: {
+          type: "unknown",
+          message: "Paid payment-mode checkout had home_plus metadata. Not granting subscription entitlement.",
+          debug,
+        } as Entitlement,
       };
     }
 
@@ -101,14 +138,13 @@ async function verifySession(session_id: string) {
       };
     }
 
-    // ✅ One-report (photo/bid)
+    // ✅ One-report photo/bid
     const resolved =
       plan === "one_report_photo"
         ? { plan: "one_report_photo" as const, kind: "photo" as const }
         : plan === "one_report_bid"
           ? { plan: "one_report_bid" as const, kind: "bid" as const }
-          : // fallback (older callers)
-            kind === "photo"
+          : kind === "photo"
             ? { plan: "one_report_photo" as const, kind: "photo" as const }
             : kind === "bid"
               ? { plan: "one_report_bid" as const, kind: "bid" as const }
@@ -120,6 +156,7 @@ async function verifySession(session_id: string) {
         entitlement: {
           type: "unknown",
           message: `Paid, but could not determine entitlement. metadata.plan="${plan}", metadata.kind="${kind}"`,
+          debug,
         } as Entitlement,
       };
     }
@@ -139,7 +176,7 @@ async function verifySession(session_id: string) {
 
   return {
     ok: false,
-    entitlement: { type: "unknown", message: `Unsupported session mode: ${session.mode}` } as Entitlement,
+    entitlement: { type: "unknown", message: `Unsupported session mode: ${session.mode}`, debug } as Entitlement,
   };
 }
 
@@ -156,8 +193,6 @@ export async function POST(req: Request) {
     }
 
     const out = await verifySession(session_id);
-
-    // Return 200 always so UI can show message nicely
     return NextResponse.json({ ok: !!out.ok, entitlement: out.entitlement }, { status: 200 });
   } catch (e: any) {
     return NextResponse.json({ ok: false, message: e?.message || "Verify error" }, { status: 500 });
