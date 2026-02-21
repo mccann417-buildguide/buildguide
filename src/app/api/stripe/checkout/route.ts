@@ -29,7 +29,10 @@ type CheckoutBody = {
   // preferred
   plan?: "one_report_photo" | "one_report_bid" | "project_pass_14d" | "home_plus";
 
-  successPath?: string;
+  // where user should end up AFTER verify
+  returnTo?: string;
+
+  // optional override (usually not needed)
   cancelPath?: string;
 
   resultId?: string;
@@ -46,6 +49,7 @@ function pickPriceId(body: CheckoutBody) {
 
   // Fallback for older callers using "kind"
   const kind = body.kind ?? "one_report";
+  // NOTE: legacy kind "one_report" uses STRIPE_ONE_REPORT_PRICE_ID if present
   if (kind === "one_report") return process.env.STRIPE_ONE_REPORT_PRICE_ID ?? null;
   if (kind === "project_pass_14d") return process.env.STRIPE_PROJECT_PASS_14D_PRICE_ID ?? null;
   if (kind === "home_plus") return process.env.STRIPE_HOME_PLUS_PRICE_ID ?? null;
@@ -90,13 +94,20 @@ export async function POST(req: Request) {
     }
 
     const baseUrl = getBaseUrl(req);
-    const successPath = body.successPath ?? "/";
-    const cancelPath = body.cancelPath ?? "/";
+
+    // ✅ Stripe should ALWAYS return here first so we can verify + unlock
+    const successPath = "/checkout/success";
+
+    // Where the user goes after verification
+    const returnTo = body.returnTo ?? "/";
+
+    // Cancel can go back to pricing (or wherever you want)
+    const cancelPath = body.cancelPath ?? "/pricing";
 
     const mode = pickMode(body);
 
     // Always append session_id for verify
-    const successUrl = `${baseUrl}${successPath}${successPath.includes("?") ? "&" : "?"}session_id={CHECKOUT_SESSION_ID}`;
+    const successUrl = `${baseUrl}${successPath}?session_id={CHECKOUT_SESSION_ID}`;
 
     const session = await stripe.checkout.sessions.create({
       mode,
@@ -107,11 +118,10 @@ export async function POST(req: Request) {
         plan: body.plan ?? "",
         kind: body.kind ?? "",
         resultId: body.resultId ?? "",
-        returnTo: successPath,
+        returnTo, // ✅ IMPORTANT: separate from successPath
       },
     });
 
-    // ✅ return debug so you can see exactly what got created
     return NextResponse.json({
       url: session.url,
       debug: {
@@ -120,6 +130,9 @@ export async function POST(req: Request) {
         priceId,
         planReceived: body.plan ?? null,
         kindReceived: body.kind ?? null,
+        successUrl,
+        returnTo,
+        cancelUrl: `${baseUrl}${cancelPath}`,
       },
     });
   } catch (err: any) {
