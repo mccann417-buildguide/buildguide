@@ -1,10 +1,12 @@
 // src/app/layout.tsx
 import "./globals.css";
-import type { Metadata } from "next";
+import type { Metadata, Viewport } from "next";
+import { Analytics } from "@vercel/analytics/next";
 
 export const metadata: Metadata = {
   title: "BuildGuide AI",
-  description: "AI-powered construction bid and photo analysis for homeowners and contractors.",
+  description:
+    "AI-powered construction bid and photo analysis for homeowners and contractors.",
   manifest: "/manifest.json",
   icons: {
     icon: [
@@ -14,13 +16,24 @@ export const metadata: Metadata = {
     ],
     apple: [{ url: "/apple-touch-icon.png", sizes: "180x180" }],
   },
+};
+
+// ✅ NEW — this removes the yellow warning
+export const viewport: Viewport = {
   themeColor: "#0f172a",
 };
 
-export default function RootLayout({ children }: { children: React.ReactNode }) {
+export default function RootLayout({
+  children,
+}: {
+  children: React.ReactNode;
+}) {
   return (
     <html lang="en">
-      <body>{children}</body>
+      <body>
+        {children}
+        <Analytics /> {/* ✅ Vercel analytics */}
+      </body>
     </html>
   );
 }
