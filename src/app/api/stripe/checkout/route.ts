@@ -65,6 +65,31 @@ function pickMode(body: CheckoutBody): Stripe.Checkout.SessionCreateParams.Mode 
   return "payment";
 }
 
+// ✅ Normalize metadata so verify always knows what was bought
+function deriveMeta(body: CheckoutBody): {
+  derivedKind: "" | "photo" | "bid";
+  normalizedPlan: "" | "one_report" | "project_pass_14d" | "home_plus";
+} {
+  const derivedKind: "" | "photo" | "bid" =
+    body.plan === "one_report_photo"
+      ? "photo"
+      : body.plan === "one_report_bid"
+        ? "bid"
+        : "";
+
+  const normalizedPlan: "" | "one_report" | "project_pass_14d" | "home_plus" =
+    body.plan === "one_report_photo" || body.plan === "one_report_bid"
+      ? "one_report"
+      : body.plan === "project_pass_14d"
+        ? "project_pass_14d"
+        : body.plan === "home_plus"
+          ? "home_plus"
+          : // fallback to legacy kind if needed
+            (body.kind as any) ?? "";
+
+  return { derivedKind, normalizedPlan };
+}
+
 export async function POST(req: Request) {
   try {
     requireEnv("STRIPE_SECRET_KEY");
@@ -109,16 +134,19 @@ export async function POST(req: Request) {
     // Always append session_id for verify
     const successUrl = `${baseUrl}${successPath}?session_id={CHECKOUT_SESSION_ID}`;
 
+    const { derivedKind, normalizedPlan } = deriveMeta(body);
+
     const session = await stripe.checkout.sessions.create({
       mode,
       line_items: [{ price: priceId, quantity: 1 }],
       success_url: successUrl,
       cancel_url: `${baseUrl}${cancelPath}`,
       metadata: {
-        plan: body.plan ?? "",
-        kind: body.kind ?? "",
+        // ✅ verify expects these to be meaningful even when caller uses `plan`
+        plan: normalizedPlan,
+        kind: derivedKind || (body.kind ?? ""),
         resultId: body.resultId ?? "",
-        returnTo, // ✅ IMPORTANT: separate from successPath
+        returnTo,
       },
     });
 
@@ -133,6 +161,11 @@ export async function POST(req: Request) {
         successUrl,
         returnTo,
         cancelUrl: `${baseUrl}${cancelPath}`,
+        meta: {
+          plan: normalizedPlan,
+          kind: derivedKind || (body.kind ?? ""),
+          resultId: body.resultId ?? "",
+        },
       },
     });
   } catch (err: any) {
