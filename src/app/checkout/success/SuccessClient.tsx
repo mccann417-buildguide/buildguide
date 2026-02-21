@@ -5,30 +5,75 @@ import { useRouter } from "next/navigation";
 
 export const dynamic = "force-dynamic";
 
+type Entitlement =
+  | {
+      type: "one_report";
+      kind: "photo" | "bid";
+      plan: "one_report_photo" | "one_report_bid";
+      paid: true;
+      resultId?: string;
+      returnTo?: string;
+    }
+  | {
+      type: "pass";
+      plan: "project_pass_14d";
+      days: 14;
+      paid: true;
+      returnTo?: string;
+    }
+  | {
+      type: "subscription";
+      plan: "home_plus";
+      status: "active" | "trialing" | string;
+      customer?: string | null;
+      subscriptionId?: string | null;
+      returnTo?: string;
+    }
+  | {
+      type: "unknown";
+      message: string;
+      debug?: any;
+    };
+
 type VerifyResponse = {
   ok: boolean;
-  kind?: "photo" | "bid" | "subscription";
-  plan?: "one_report" | "project_pass_14d" | "home_plus";
-  resultId?: string;
-  returnTo?: string;
+  entitlement?: Entitlement;
   message?: string;
 };
 
-function setEntitlement(payload: VerifyResponse) {
+function applyEntitlement(ent: Entitlement) {
   const now = Date.now();
 
-  if (payload.plan === "one_report" && payload.kind && payload.resultId) {
-    localStorage.setItem(`bg_unlocked_${payload.kind}_${payload.resultId}`, "1");
+  if (ent.type === "one_report" && ent.paid && ent.kind && ent.resultId) {
+    localStorage.setItem(`bg_unlocked_${ent.kind}_${ent.resultId}`, "1");
   }
 
-  if (payload.plan === "project_pass_14d") {
+  if (ent.type === "pass" && ent.paid) {
     const expires = now + 14 * 24 * 60 * 60 * 1000;
     localStorage.setItem("bg_project_pass_expires", String(expires));
   }
 
-  if (payload.plan === "home_plus") {
+  if (ent.type === "subscription") {
+    // You can optionally check ent.status === "active" or "trialing" etc.
     localStorage.setItem("bg_home_plus_active", "1");
   }
+}
+
+function destinationFromEntitlement(ent: Entitlement): string {
+  // Highest priority: explicit returnTo
+  if ("returnTo" in ent && ent.returnTo) return ent.returnTo;
+
+  // One-report fallback
+  if (ent.type === "one_report" && ent.kind && ent.resultId) {
+    return ent.kind === "photo"
+      ? `/photo?resultId=${encodeURIComponent(ent.resultId)}`
+      : `/bid?resultId=${encodeURIComponent(ent.resultId)}`;
+  }
+
+  // If pass/subscription but no returnTo, send to pricing or home
+  if (ent.type === "pass" || ent.type === "subscription") return "/";
+
+  return "/";
 }
 
 export default function SuccessClient() {
@@ -48,10 +93,12 @@ export default function SuccessClient() {
 
     (async () => {
       try {
+        // ✅ Your verify route supports GET (you pasted it). Use GET for simplicity.
         const res = await fetch(
           `/api/stripe/verify?session_id=${encodeURIComponent(session_id)}`,
           { cache: "no-store" }
         );
+
         const data = (await res.json()) as VerifyResponse;
 
         if (!data.ok) {
@@ -60,23 +107,29 @@ export default function SuccessClient() {
           return;
         }
 
+        const ent = data.entitlement;
+        if (!ent) {
+          setTitle("Verification error");
+          setMsg("Verified payment but no entitlement returned. Please contact support.");
+          return;
+        }
+
+        if (ent.type === "unknown") {
+          setTitle("Verified — but could not unlock");
+          setMsg(ent.message || "We verified payment, but couldn't determine what to unlock.");
+          return;
+        }
+
         setTitle("Payment confirmed ✅");
-        setMsg("Unlocking your report…");
+        setMsg("Unlocking…");
 
-        setEntitlement(data);
+        applyEntitlement(ent);
 
-        const dest =
-          data.returnTo ||
-          (data.kind === "photo"
-            ? `/photo?resultId=${data.resultId}`
-            : data.kind === "bid"
-              ? `/bid?resultId=${data.resultId}`
-              : "/");
+        const dest = destinationFromEntitlement(ent);
 
-        // Leave the page visible briefly (also helps conversion tracking)
         setTimeout(() => {
           router.replace(dest);
-        }, 900);
+        }, 600);
       } catch {
         setTitle("Error verifying payment");
         setMsg("Something went wrong verifying your purchase. Please try again.");
@@ -93,7 +146,7 @@ export default function SuccessClient() {
         <p style={{ marginTop: 10, fontSize: 14, opacity: 0.85 }}>{msg}</p>
 
         <p style={{ marginTop: 12, fontSize: 12, opacity: 0.65 }}>
-          If this page doesn’t move in a few seconds, go back to Pricing and try again.
+          If this page doesn’t move in a few seconds, go back and try again — or contact support if you were charged.
         </p>
       </div>
     </div>
