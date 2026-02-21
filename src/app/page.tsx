@@ -41,23 +41,31 @@ export default function HomePage() {
         <div className="rounded-3xl border p-6 md:p-10 shadow-sm">
           <div className="flex flex-col md:flex-row items-start justify-between gap-6">
             <div className="w-full">
-              <div className="text-sm text-neutral-700">⭐⭐⭐⭐⭐ (4.9/5)</div>
-
               <h1 className="mt-3 text-3xl md:text-5xl font-semibold tracking-tight">
-                Know what you’re looking at — before you approve the job.
+                Understand exactly what you’re paying for — before you commit.
               </h1>
 
               <p className="mt-4 max-w-2xl text-neutral-700">
-                Upload a photo. Ask questions. Check your bid. BuildGuide helps you
-                spot red flags, understand what’s missing, and see whether a bid
-                looks <span className="font-semibold">low, typical, or high</span>{" "}
-                for your area — before you commit.
+                Break down contractor bids, review job photos, compare pricing to
+                local ranges, and generate clear PDF reports — so you can spot red
+                flags, missing scope, and vague allowances before signing or closing
+                walls.
               </p>
 
               <div className="mt-6 flex flex-col sm:flex-row gap-3">
+                {/* Primary CTA: BID (black) */}
+                <Link
+                  href="/bid"
+                  className="rounded-xl bg-black text-white px-5 py-3 text-sm font-medium hover:bg-black/90 text-center inline-flex items-center justify-center gap-2"
+                >
+                  <span aria-hidden>📄</span>
+                  <span>Check a Bid</span>
+                </Link>
+
+                {/* Secondary CTA: PHOTO */}
                 <Link
                   href="/photo"
-                  className="rounded-xl bg-black text-white px-5 py-3 text-sm font-medium hover:bg-black/90 text-center inline-flex items-center justify-center gap-2"
+                  className="rounded-xl border px-5 py-3 text-sm font-medium hover:bg-neutral-50 text-center inline-flex items-center justify-center gap-2"
                 >
                   <Image
                     src="/icons/icon-192.png"
@@ -66,14 +74,7 @@ export default function HomePage() {
                     height={18}
                     className="rounded-[4px]"
                   />
-                  <span>Try 1–2 Free Photo Checks</span>
-                </Link>
-
-                <Link
-                  href="/bid"
-                  className="rounded-xl border px-5 py-3 text-sm font-medium hover:bg-neutral-50 text-center"
-                >
-                  📄 Check a Bid
+                  <span>Photo Check</span>
                 </Link>
 
                 <button
@@ -82,6 +83,11 @@ export default function HomePage() {
                 >
                   📲 Add to Home Screen
                 </button>
+              </div>
+
+              {/* Keep rating, but make it subtle + credible */}
+              <div className="mt-3 text-xs text-neutral-600">
+                ★ 4.9/5 from early users
               </div>
             </div>
 
@@ -112,7 +118,8 @@ export default function HomePage() {
                   </button>
 
                   <div className="mt-2 text-[11px] text-neutral-500">
-                    Icon file: <span className="font-mono">/public/icons/icon-192.png</span>
+                    Icon file:{" "}
+                    <span className="font-mono">/public/icons/icon-192.png</span>
                   </div>
                 </div>
               </div>
@@ -127,21 +134,21 @@ export default function HomePage() {
             <div className="rounded-2xl border p-4">
               <div className="font-semibold">Verify</div>
               <div className="text-neutral-700 mt-1">
-                Photo checks for problems, missing steps, and risk.
+                Photo checks to surface concerns, missing steps, and risk areas.
               </div>
             </div>
 
             <div className="rounded-2xl border p-4">
               <div className="font-semibold">Understand</div>
               <div className="text-neutral-700 mt-1">
-                Plain-English explanations and what actually matters.
+                Plain-English explanations plus the right questions to ask.
               </div>
             </div>
 
             <div className="rounded-2xl border p-4">
               <div className="font-semibold">Decide</div>
               <div className="text-neutral-700 mt-1">
-                Bid check + where the price stands locally.
+                Bid clarity + where pricing stands locally.
               </div>
             </div>
           </div>
@@ -152,39 +159,39 @@ export default function HomePage() {
       <Section
         id="how-it-works"
         eyebrow="How it works"
-        title="A simple flow that matches how homeowners actually think."
+        title="A simple flow that matches how people actually decide."
         subtitle="Verify → Understand → Decide."
       >
         <div className="grid md:grid-cols-3 gap-4">
           <FeatureCard
             title="1) Verify (Photo Check)"
-            desc="Get a clear read on what you’re looking at."
+            desc="Get clarity on what you’re looking at."
             bullets={[
-              "What looks right vs wrong",
+              "What looks right vs questionable",
               "What may be missing",
-              "Safety & code red flags",
-              "Suggested questions to ask",
+              "Concerns to ask about",
+              "Suggested questions to send",
             ]}
           />
 
           <FeatureCard
             title="2) Understand (Ask Questions)"
-            desc="Context and explanations that make sense."
+            desc="Context that makes sense fast."
             bullets={[
               "Step-by-step guidance",
-              "What happens if it’s wrong",
+              "What could go wrong later",
               "What to say to your contractor",
-              "What actually matters",
+              "What actually matters most",
             ]}
           />
 
           <FeatureCard
             title="3) Decide (Bid & Price Check)"
-            desc="See what’s included, what’s missing, and where the price stands locally."
+            desc="See what’s included, what’s missing, and where pricing stands locally."
             bullets={[
-              "What’s missing",
-              "Risk flags",
-              "Where the price stands locally",
+              "Defined scope vs vague scope",
+              "Allowances & exclusions",
+              "Change-order risk flags",
               "What to ask before signing",
             ]}
           />
@@ -192,7 +199,11 @@ export default function HomePage() {
       </Section>
 
       {/* TESTIMONIALS */}
-      <Section id="testimonials" eyebrow="Reviews" title="Trusted by homeowners and contractors">
+      <Section
+        id="testimonials"
+        eyebrow="Reviews"
+        title="Trusted by homeowners and contractors"
+      >
         <div className="grid md:grid-cols-2 gap-4">
           <TestimonialCard
             name="Ron G."
@@ -215,14 +226,24 @@ export default function HomePage() {
           </h2>
 
           <p className="mt-3 text-neutral-700 max-w-2xl">
-            BuildGuide is your second set of eyes — from photos, to questions,
-            to bids.
+            BuildGuide is your clarity layer — from bids, to photos, to the right
+            questions before you commit.
           </p>
 
           <div className="mt-6 flex flex-col sm:flex-row gap-3">
+            {/* Primary CTA: BID (black) */}
+            <Link
+              href="/bid"
+              className="rounded-xl bg-black text-white px-5 py-3 text-sm font-medium hover:bg-black/90 text-center inline-flex items-center justify-center gap-2"
+            >
+              <span aria-hidden>📄</span>
+              <span>Check a Bid</span>
+            </Link>
+
+            {/* Secondary CTA: PHOTO */}
             <Link
               href="/photo"
-              className="rounded-xl bg-black text-white px-5 py-3 text-sm font-medium hover:bg-black/90 text-center inline-flex items-center justify-center gap-2"
+              className="rounded-xl border px-5 py-3 text-sm font-medium hover:bg-neutral-50 text-center inline-flex items-center justify-center gap-2"
             >
               <Image
                 src="/icons/icon-192.png"
@@ -231,14 +252,7 @@ export default function HomePage() {
                 height={18}
                 className="rounded-[4px]"
               />
-              <span>Try 1–2 Free Photo Checks</span>
-            </Link>
-
-            <Link
-              href="/bid"
-              className="rounded-xl border px-5 py-3 text-sm font-medium hover:bg-neutral-50 text-center"
-            >
-              📄 Check a Bid
+              <span>Photo Check</span>
             </Link>
 
             <button
