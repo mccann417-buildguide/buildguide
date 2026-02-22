@@ -777,7 +777,8 @@ export default function PhotoPage() {
         trySaveBase(result.id, result);
       }
 
-      const returnPath = `/photo?resultId=${encodeURIComponent(targetResultId)}`;
+      // ✅ FIX: send returnTo + cancelPath (NOT successPath)
+      const returnTo = `/photo?resultId=${encodeURIComponent(targetResultId)}`;
 
       const res = await fetch("/api/stripe/checkout", {
         method: "POST",
@@ -785,8 +786,8 @@ export default function PhotoPage() {
         body: JSON.stringify({
           plan: "one_report_photo",
           resultId: targetResultId,
-          successPath: returnPath,
-          cancelPath: returnPath,
+          returnTo,
+          cancelPath: returnTo,
         }),
       });
 

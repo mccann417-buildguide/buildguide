@@ -172,7 +172,6 @@ function FullReportCard({
             Unlock Full Report $2.99
           </button>
 
-          {/* ✅ NEW: same second option as Photo */}
           <button
             type="button"
             onClick={onGoHomePlus}
@@ -487,16 +486,18 @@ function BidPageInner({
         saveToHistory(result);
       }
 
-      const returnPath = `/bid?resultId=${encodeURIComponent(targetResultId)}`;
+      // ✅ FIX: send returnTo + cancelPath (NOT successPath)
+      const rid = String(targetResultId);
+      const returnTo = `/bid?resultId=${encodeURIComponent(rid)}`;
 
       const res = await fetch("/api/stripe/checkout", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           plan: "one_report_bid",
-          successPath: returnPath,
-          cancelPath: returnPath,
-          resultId: String(targetResultId),
+          resultId: rid,
+          returnTo,
+          cancelPath: returnTo,
         }),
       });
 
