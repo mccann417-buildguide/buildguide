@@ -54,14 +54,27 @@ function applyEntitlement(ent: Entitlement) {
   }
 
   if (ent.type === "subscription") {
-    // You can optionally check ent.status === "active" or "trialing" etc.
     localStorage.setItem("bg_home_plus_active", "1");
   }
 }
 
+function normalizeReturnTo(raw?: string): string | null {
+  const v = (raw || "").trim();
+  if (!v) return null;
+
+  // ✅ ignore "/" because it just dumps people on home and masks bugs
+  if (v === "/") return null;
+
+  // ✅ only allow internal paths
+  if (!v.startsWith("/")) return null;
+
+  return v;
+}
+
 function destinationFromEntitlement(ent: Entitlement): string {
-  // Highest priority: explicit returnTo
-  if ("returnTo" in ent && ent.returnTo) return ent.returnTo;
+  // Highest priority: explicit returnTo (if valid)
+  const safeReturnTo = normalizeReturnTo("returnTo" in ent ? ent.returnTo : undefined);
+  if (safeReturnTo) return safeReturnTo;
 
   // One-report fallback
   if (ent.type === "one_report" && ent.kind && ent.resultId) {
@@ -70,10 +83,11 @@ function destinationFromEntitlement(ent: Entitlement): string {
       : `/bid?resultId=${encodeURIComponent(ent.resultId)}`;
   }
 
-  // If pass/subscription but no returnTo, send to pricing or home
-  if (ent.type === "pass" || ent.type === "subscription") return "/";
+  // Pass/subscription fallback (send to pricing or a useful landing page)
+  if (ent.type === "pass" || ent.type === "subscription") return "/pricing";
 
-  return "/";
+  // Absolute fallback
+  return "/pricing";
 }
 
 export default function SuccessClient() {
@@ -93,7 +107,6 @@ export default function SuccessClient() {
 
     (async () => {
       try {
-        // ✅ Your verify route supports GET (you pasted it). Use GET for simplicity.
         const res = await fetch(
           `/api/stripe/verify?session_id=${encodeURIComponent(session_id)}`,
           { cache: "no-store" }
@@ -129,7 +142,7 @@ export default function SuccessClient() {
 
         setTimeout(() => {
           router.replace(dest);
-        }, 600);
+        }, 300);
       } catch {
         setTitle("Error verifying payment");
         setMsg("Something went wrong verifying your purchase. Please try again.");

@@ -29,7 +29,7 @@ type CheckoutBody = {
   // preferred
   plan?: "one_report_photo" | "one_report_bid" | "project_pass_14d" | "home_plus";
 
-  // where user should end up AFTER verify
+  // where user should end up AFTER verify (optional)
   returnTo?: string;
 
   // optional override (usually not needed)
@@ -49,7 +49,6 @@ function pickPriceId(body: CheckoutBody) {
 
   // Fallback for older callers using "kind"
   const kind = body.kind ?? "one_report";
-  // NOTE: legacy kind "one_report" uses STRIPE_ONE_REPORT_PRICE_ID if present
   if (kind === "one_report") return process.env.STRIPE_ONE_REPORT_PRICE_ID ?? null;
   if (kind === "project_pass_14d") return process.env.STRIPE_PROJECT_PASS_14D_PRICE_ID ?? null;
   if (kind === "home_plus") return process.env.STRIPE_HOME_PLUS_PRICE_ID ?? null;
@@ -58,14 +57,10 @@ function pickPriceId(body: CheckoutBody) {
 }
 
 function pickMode(body: CheckoutBody): Stripe.Checkout.SessionCreateParams.Mode {
-  // ✅ Only Home Plus may be subscription
   if (body.plan === "home_plus" || body.kind === "home_plus") return "subscription";
-
-  // ✅ Everything else MUST be a one-time payment checkout session
   return "payment";
 }
 
-// ✅ Normalize metadata so verify always knows what was bought
 function deriveMeta(body: CheckoutBody): {
   derivedKind: "" | "photo" | "bid";
   normalizedPlan: "" | "one_report" | "project_pass_14d" | "home_plus";
@@ -84,8 +79,7 @@ function deriveMeta(body: CheckoutBody): {
         ? "project_pass_14d"
         : body.plan === "home_plus"
           ? "home_plus"
-          : // fallback to legacy kind if needed
-            (body.kind as any) ?? "";
+          : ((body.kind as any) ?? "");
 
   return { derivedKind, normalizedPlan };
 }
@@ -96,7 +90,6 @@ export async function POST(req: Request) {
 
     const body = (await req.json().catch(() => ({}))) as CheckoutBody;
 
-    // Guard: require at least plan or kind
     if (!body.plan && !body.kind) {
       return NextResponse.json({ error: "Missing plan/kind in checkout request." }, { status: 400 });
     }
@@ -120,18 +113,16 @@ export async function POST(req: Request) {
 
     const baseUrl = getBaseUrl(req);
 
-    // ✅ Stripe should ALWAYS return here first so we can verify + unlock
     const successPath = "/checkout/success";
 
-    // Where the user goes after verification
-    const returnTo = body.returnTo ?? "/";
+    // ✅ IMPORTANT FIX:
+    // Only set returnTo if the caller actually provided it.
+    // DO NOT default to "/", because that forces the success page to always redirect home.
+    const returnTo = (body.returnTo || "").trim(); // "" means "not provided"
 
-    // Cancel can go back to pricing (or wherever you want)
     const cancelPath = body.cancelPath ?? "/pricing";
-
     const mode = pickMode(body);
 
-    // Always append session_id for verify
     const successUrl = `${baseUrl}${successPath}?session_id={CHECKOUT_SESSION_ID}`;
 
     const { derivedKind, normalizedPlan } = deriveMeta(body);
@@ -142,10 +133,10 @@ export async function POST(req: Request) {
       success_url: successUrl,
       cancel_url: `${baseUrl}${cancelPath}`,
       metadata: {
-        // ✅ verify expects these to be meaningful even when caller uses `plan`
         plan: normalizedPlan,
-        kind: derivedKind || (body.kind ?? ""),
+        kind: derivedKind || (body.kind ?? ""), // ideally "photo"|"bid" for one_report, or "project_pass_14d"/"home_plus"
         resultId: body.resultId ?? "",
+        // ✅ store returnTo ONLY if present
         returnTo,
       },
     });
@@ -159,12 +150,13 @@ export async function POST(req: Request) {
         planReceived: body.plan ?? null,
         kindReceived: body.kind ?? null,
         successUrl,
-        returnTo,
+        returnTo: returnTo || null,
         cancelUrl: `${baseUrl}${cancelPath}`,
         meta: {
           plan: normalizedPlan,
           kind: derivedKind || (body.kind ?? ""),
           resultId: body.resultId ?? "",
+          returnTo: returnTo || null,
         },
       },
     });
