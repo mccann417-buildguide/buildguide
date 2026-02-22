@@ -1,3 +1,4 @@
+// src/app/checkout/success/SuccessClient.tsx
 "use client";
 
 import React, { useEffect, useState } from "react";
@@ -41,34 +42,56 @@ type VerifyResponse = {
   message?: string;
 };
 
+function normalizeReturnTo(raw?: string): string | null {
+  const v = (raw || "").trim();
+  if (!v) return null;
+
+  // ignore "/" because it just dumps people on home and masks bugs
+  if (v === "/") return null;
+
+  // only allow internal paths
+  if (!v.startsWith("/")) return null;
+
+  return v;
+}
+
+// ✅ If resultId wasn't included in Stripe metadata, we can often recover it from returnTo
+function extractResultIdFromReturnTo(returnTo?: string): string | null {
+  if (!returnTo) return null;
+
+  try {
+    // returnTo is usually a relative path like "/bid?resultId=abc"
+    const u = new URL(returnTo, window.location.origin);
+    return u.searchParams.get("resultId");
+  } catch {
+    const m = returnTo.match(/[?&]resultId=([^&]+)/);
+    return m ? decodeURIComponent(m[1]) : null;
+  }
+}
+
 function applyEntitlement(ent: Entitlement) {
   const now = Date.now();
 
-  if (ent.type === "one_report" && ent.paid && ent.kind && ent.resultId) {
-    localStorage.setItem(`bg_unlocked_${ent.kind}_${ent.resultId}`, "1");
+  // ✅ One-report unlock
+  // Primary: ent.resultId (from Stripe metadata)
+  // Fallback: extract from ent.returnTo (common when returnTo carries resultId)
+  if (ent.type === "one_report" && ent.paid && ent.kind) {
+    const rid = ent.resultId || extractResultIdFromReturnTo(ent.returnTo) || "";
+    if (rid) {
+      localStorage.setItem(`bg_unlocked_${ent.kind}_${rid}`, "1");
+    }
   }
 
+  // ✅ Project Pass 14d
   if (ent.type === "pass" && ent.paid) {
     const expires = now + 14 * 24 * 60 * 60 * 1000;
     localStorage.setItem("bg_project_pass_expires", String(expires));
   }
 
+  // ✅ Home Plus subscription flag
   if (ent.type === "subscription") {
     localStorage.setItem("bg_home_plus_active", "1");
   }
-}
-
-function normalizeReturnTo(raw?: string): string | null {
-  const v = (raw || "").trim();
-  if (!v) return null;
-
-  // ✅ ignore "/" because it just dumps people on home and masks bugs
-  if (v === "/") return null;
-
-  // ✅ only allow internal paths
-  if (!v.startsWith("/")) return null;
-
-  return v;
 }
 
 function destinationFromEntitlement(ent: Entitlement): string {
@@ -77,13 +100,19 @@ function destinationFromEntitlement(ent: Entitlement): string {
   if (safeReturnTo) return safeReturnTo;
 
   // One-report fallback
-  if (ent.type === "one_report" && ent.kind && ent.resultId) {
-    return ent.kind === "photo"
-      ? `/photo?resultId=${encodeURIComponent(ent.resultId)}`
-      : `/bid?resultId=${encodeURIComponent(ent.resultId)}`;
+  if (ent.type === "one_report" && ent.kind) {
+    const rid = ent.resultId || extractResultIdFromReturnTo(ent.returnTo) || "";
+    if (rid) {
+      return ent.kind === "photo"
+        ? `/photo?resultId=${encodeURIComponent(rid)}`
+        : `/bid?resultId=${encodeURIComponent(rid)}`;
+    }
+
+    // If we can't determine resultId, go somewhere sensible
+    return ent.kind === "photo" ? "/photo" : "/bid";
   }
 
-  // Pass/subscription fallback (send to pricing or a useful landing page)
+  // Pass/subscription fallback
   if (ent.type === "pass" || ent.type === "subscription") return "/pricing";
 
   // Absolute fallback
@@ -107,10 +136,9 @@ export default function SuccessClient() {
 
     (async () => {
       try {
-        const res = await fetch(
-          `/api/stripe/verify?session_id=${encodeURIComponent(session_id)}`,
-          { cache: "no-store" }
-        );
+        const res = await fetch(`/api/stripe/verify?session_id=${encodeURIComponent(session_id)}`, {
+          cache: "no-store",
+        });
 
         const data = (await res.json()) as VerifyResponse;
 
