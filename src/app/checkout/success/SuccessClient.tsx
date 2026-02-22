@@ -1,7 +1,10 @@
+// src/app/checkout/success/SuccessClient.tsx
 "use client";
 
 import React, { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
+import { setPlan, startProjectPass } from "../../lib/storage";
+import { markUnlocked } from "../../lib/history";
 
 export const dynamic = "force-dynamic";
 
@@ -41,69 +44,64 @@ type VerifyResponse = {
   message?: string;
 };
 
-function applyEntitlement(ent: Entitlement) {
-  const now = Date.now();
-
-  // ✅ One report:
-  // - If we have resultId: unlock that specific report
-  // - If we do NOT have resultId: store a credit to unlock the next one
-  if (ent.type === "one_report" && ent.paid && ent.kind) {
-    const rid = (ent.resultId || "").trim();
-    if (rid) {
-      localStorage.setItem(`bg_unlocked_${ent.kind}_${rid}`, "1");
-    } else {
-      localStorage.setItem(`bg_credit_${ent.kind}`, "1");
-    }
-  }
-
-  // ✅ Project Pass 14d
-  if (ent.type === "pass" && ent.paid) {
-    const expires = now + 14 * 24 * 60 * 60 * 1000;
-    localStorage.setItem("bg_project_pass_expires", String(expires));
-  }
-
-  // ✅ Home Plus
-  if (ent.type === "subscription") {
-    localStorage.setItem("bg_home_plus_active", "1");
-  }
+function addonKey(kind: "photo" | "bid", resultId: string) {
+  return kind === "photo"
+    ? `buildguide_photo_addon_unlocked_${resultId}`
+    : `buildguide_bid_addon_unlocked_${resultId}`;
 }
 
-function normalizeReturnTo(raw?: string): string | null {
-  const v = (raw || "").trim();
-  if (!v) return null;
+function creditKey(kind: "photo" | "bid") {
+  return kind === "photo" ? "buildguide_credit_photo_v1" : "buildguide_credit_bid_v1";
+}
 
-  // ignore home default (it masks issues)
-  if (v === "/") return null;
+function applyEntitlement(ent: Entitlement) {
+  // One-report unlock
+  if (ent.type === "one_report" && ent.paid) {
+    const rid = (ent.resultId || "").trim();
+    if (rid) {
+      try {
+        localStorage.setItem(addonKey(ent.kind, rid), "1");
+      } catch {}
 
-  // internal only
-  if (!v.startsWith("/")) return null;
+      try {
+        markUnlocked(rid);
+      } catch {}
+    } else {
+      try {
+        localStorage.setItem(creditKey(ent.kind), "1");
+      } catch {}
+    }
+    return;
+  }
 
-  // reject poisoned/blank ids that cause blank pages
-  if (v.includes("resultId=undefined") || v.includes("resultId=null")) return null;
+  // Project pass
+  if (ent.type === "pass" && ent.paid && ent.days) {
+    try {
+      startProjectPass(ent.days);
+    } catch {}
+    return;
+  }
 
-  return v;
+  // Subscription
+  if (ent.type === "subscription") {
+    const ok = ent.status === "active" || ent.status === "trialing";
+    if (ok) {
+      try {
+        setPlan("home_plus");
+      } catch {}
+    }
+    return;
+  }
 }
 
 function destinationFromEntitlement(ent: Entitlement): string {
-  // Highest priority: safe returnTo
-  const safeReturnTo = normalizeReturnTo("returnTo" in ent ? ent.returnTo : undefined);
-  if (safeReturnTo) return safeReturnTo;
+  if ("returnTo" in ent && ent.returnTo) return ent.returnTo;
 
-  // One-report routing:
-  // If we have a valid resultId, go directly to that report.
-  // If not, go to the tool page so it never renders blank.
-  if (ent.type === "one_report" && ent.kind) {
-    const rid = (ent.resultId || "").trim();
-    if (rid) {
-      return ent.kind === "photo"
-        ? `/photo?resultId=${encodeURIComponent(rid)}`
-        : `/bid?resultId=${encodeURIComponent(rid)}`;
-    }
-    return ent.kind === "photo" ? "/photo" : "/bid";
+  if (ent.type === "one_report" && ent.kind && ent.resultId) {
+    return ent.kind === "photo"
+      ? `/photo?resultId=${encodeURIComponent(ent.resultId)}`
+      : `/bid?resultId=${encodeURIComponent(ent.resultId)}`;
   }
-
-  // Pass/subscription: send somewhere useful
-  if (ent.type === "pass" || ent.type === "subscription") return "/pricing";
 
   return "/pricing";
 }
@@ -159,7 +157,7 @@ export default function SuccessClient() {
 
         setTimeout(() => {
           router.replace(dest);
-        }, 250);
+        }, 450);
       } catch {
         setTitle("Error verifying payment");
         setMsg("Something went wrong verifying your purchase. Please try again.");

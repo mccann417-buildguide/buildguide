@@ -50,8 +50,8 @@ async function verifySession(session_id: string) {
   });
 
   const md = (session.metadata || {}) as Record<string, string>;
-  const plan = (md.plan || "").trim();
-  const kind = (md.kind || "").trim();
+  const plan = (md.plan || "").trim(); // "one_report" | "project_pass_14d" | "home_plus"
+  const kind = (md.kind || "").trim(); // "photo" | "bid" | "project_pass_14d" | "home_plus"
   const resultId = (md.resultId || "").trim();
   const returnTo = (md.returnTo || "").trim();
 
@@ -62,7 +62,7 @@ async function verifySession(session_id: string) {
     sessionId: session.id,
   };
 
-  // ✅ SUBSCRIPTION MODE: ONLY allow Home Plus if metadata says Home Plus
+  // ✅ Subscription mode
   if (session.mode === "subscription") {
     const isHomePlus = plan === "home_plus" || kind === "home_plus";
 
@@ -71,8 +71,7 @@ async function verifySession(session_id: string) {
         ok: true,
         entitlement: {
           type: "unknown",
-          message:
-            "Checkout is subscription-mode, but metadata does not indicate home_plus. Not granting subscription entitlement.",
+          message: "Subscription checkout, but metadata is not home_plus. Not granting subscription entitlement.",
           debug,
         } as Entitlement,
       };
@@ -99,7 +98,7 @@ async function verifySession(session_id: string) {
     };
   }
 
-  // ✅ PAYMENT MODE
+  // ✅ Payment mode
   if (session.mode === "payment") {
     if (session.payment_status !== "paid") {
       return {
@@ -112,19 +111,7 @@ async function verifySession(session_id: string) {
       };
     }
 
-    // ✅ If someone somehow hit payment-mode but metadata says home_plus, DO NOT upgrade
-    if (plan === "home_plus" || kind === "home_plus") {
-      return {
-        ok: true,
-        entitlement: {
-          type: "unknown",
-          message: "Paid payment-mode checkout had home_plus metadata. Not granting subscription entitlement.",
-          debug,
-        } as Entitlement,
-      };
-    }
-
-    // ✅ Project Pass 14d
+    // Project Pass
     if (plan === "project_pass_14d" || kind === "project_pass_14d") {
       return {
         ok: true,
@@ -138,17 +125,25 @@ async function verifySession(session_id: string) {
       };
     }
 
-    // ✅ One-report photo/bid
+    // Home Plus should never be payment mode
+    if (plan === "home_plus" || kind === "home_plus") {
+      return {
+        ok: true,
+        entitlement: {
+          type: "unknown",
+          message: "Paid payment-mode checkout had home_plus metadata. Not granting subscription entitlement.",
+          debug,
+        } as Entitlement,
+      };
+    }
+
+    // One-report
     const resolved =
-      plan === "one_report_photo"
+      kind === "photo"
         ? { plan: "one_report_photo" as const, kind: "photo" as const }
-        : plan === "one_report_bid"
+        : kind === "bid"
           ? { plan: "one_report_bid" as const, kind: "bid" as const }
-          : kind === "photo"
-            ? { plan: "one_report_photo" as const, kind: "photo" as const }
-            : kind === "bid"
-              ? { plan: "one_report_bid" as const, kind: "bid" as const }
-              : null;
+          : null;
 
     if (!resolved) {
       return {
@@ -180,7 +175,7 @@ async function verifySession(session_id: string) {
   };
 }
 
-// ✅ Your app calls POST with JSON body: { session_id }
+// ✅ POST with JSON body: { session_id }
 export async function POST(req: Request) {
   try {
     requireEnv("STRIPE_SECRET_KEY");
@@ -199,7 +194,7 @@ export async function POST(req: Request) {
   }
 }
 
-// Optional GET for debugging
+// ✅ GET for SuccessClient: /api/stripe/verify?session_id=...
 export async function GET(req: Request) {
   try {
     requireEnv("STRIPE_SECRET_KEY");

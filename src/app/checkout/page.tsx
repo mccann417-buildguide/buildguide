@@ -1,3 +1,4 @@
+// src/app/checkout/page.tsx
 "use client";
 
 import React, { Suspense, useEffect } from "react";
@@ -10,14 +11,11 @@ function CheckoutInner() {
   const params = useSearchParams();
 
   useEffect(() => {
-    // If Stripe sent session_id here, forward to the success page that verifies it
     const sessionId = params.get("session_id");
     if (sessionId) {
       router.replace(`/checkout/success?session_id=${encodeURIComponent(sessionId)}`);
       return;
     }
-
-    // Otherwise send them home (or to pricing)
     router.replace("/pricing");
   }, [params, router]);
 

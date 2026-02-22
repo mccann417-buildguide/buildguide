@@ -24,17 +24,15 @@ function requireEnv(name: string) {
 
 type CheckoutBody = {
   // legacy/simple
-  kind?: "one_report" | "project_pass_14d" | "home_plus";
+  kind?: "one_report" | "project_pass_14d" | "home_plus" | "photo" | "bid";
 
   // preferred
   plan?: "one_report_photo" | "one_report_bid" | "project_pass_14d" | "home_plus";
 
-  // where user should end up AFTER verify (optional)
+  // where user should end up AFTER success verification
   returnTo?: string;
 
-  // optional override (usually not needed)
   cancelPath?: string;
-
   resultId?: string;
 };
 
@@ -47,7 +45,7 @@ function pickPriceId(body: CheckoutBody) {
   if (plan === "project_pass_14d") return process.env.STRIPE_PROJECT_PASS_14D_PRICE_ID ?? null;
   if (plan === "home_plus") return process.env.STRIPE_HOME_PLUS_PRICE_ID ?? null;
 
-  // Fallback for older callers using "kind"
+  // Fallback for older callers
   const kind = body.kind ?? "one_report";
   if (kind === "one_report") return process.env.STRIPE_ONE_REPORT_PRICE_ID ?? null;
   if (kind === "project_pass_14d") return process.env.STRIPE_PROJECT_PASS_14D_PRICE_ID ?? null;
@@ -61,27 +59,47 @@ function pickMode(body: CheckoutBody): Stripe.Checkout.SessionCreateParams.Mode 
   return "payment";
 }
 
-function deriveMeta(body: CheckoutBody): {
-  derivedKind: "" | "photo" | "bid";
-  normalizedPlan: "" | "one_report" | "project_pass_14d" | "home_plus";
-} {
-  const derivedKind: "" | "photo" | "bid" =
-    body.plan === "one_report_photo"
-      ? "photo"
-      : body.plan === "one_report_bid"
-        ? "bid"
-        : "";
+// ✅ Always store metadata in a way verify can understand
+function buildMetadata(body: CheckoutBody) {
+  const plan = (body.plan || "").trim();
 
-  const normalizedPlan: "" | "one_report" | "project_pass_14d" | "home_plus" =
-    body.plan === "one_report_photo" || body.plan === "one_report_bid"
+  // normalizedPlan is what verify expects for pass/subscription routing
+  const normalizedPlan: "one_report" | "project_pass_14d" | "home_plus" | "" =
+    plan === "one_report_photo" || plan === "one_report_bid"
       ? "one_report"
-      : body.plan === "project_pass_14d"
+      : plan === "project_pass_14d"
         ? "project_pass_14d"
-        : body.plan === "home_plus"
+        : plan === "home_plus"
           ? "home_plus"
           : ((body.kind as any) ?? "");
 
-  return { derivedKind, normalizedPlan };
+  const kind: "photo" | "bid" | "project_pass_14d" | "home_plus" | "" =
+    plan === "one_report_photo"
+      ? "photo"
+      : plan === "one_report_bid"
+        ? "bid"
+        : plan === "project_pass_14d"
+          ? "project_pass_14d"
+          : plan === "home_plus"
+            ? "home_plus"
+            : (body.kind === "photo" || body.kind === "bid" ? body.kind : ("" as any));
+
+  const returnTo = (body.returnTo || "").trim();
+  const resultId = (body.resultId || "").trim();
+
+  // ✅ Hard guard: one_report must know whether it's photo or bid
+  if (normalizedPlan === "one_report" && (kind !== "photo" && kind !== "bid")) {
+    return { error: 'Invalid one_report checkout. Use plan:"one_report_photo" or plan:"one_report_bid".' as string };
+  }
+
+  return {
+    metadata: {
+      plan: normalizedPlan,
+      kind, // "photo" | "bid" | "project_pass_14d" | "home_plus"
+      resultId,
+      returnTo, // optional
+    } as Record<string, string>,
+  };
 }
 
 export async function POST(req: Request) {
@@ -113,32 +131,24 @@ export async function POST(req: Request) {
 
     const baseUrl = getBaseUrl(req);
 
-    const successPath = "/checkout/success";
-
-    // ✅ IMPORTANT FIX:
-    // Only set returnTo if the caller actually provided it.
-    // DO NOT default to "/", because that forces the success page to always redirect home.
-    const returnTo = (body.returnTo || "").trim(); // "" means "not provided"
-
+    // ✅ ALWAYS go to /checkout first, then /checkout/success verifies + redirects correctly
+    const successPath = "/checkout";
     const cancelPath = body.cancelPath ?? "/pricing";
     const mode = pickMode(body);
 
-    const successUrl = `${baseUrl}${successPath}?session_id={CHECKOUT_SESSION_ID}`;
+    const metaOut = buildMetadata(body);
+    if ("error" in metaOut) {
+      return NextResponse.json({ error: metaOut.error }, { status: 400 });
+    }
 
-    const { derivedKind, normalizedPlan } = deriveMeta(body);
+    const successUrl = `${baseUrl}${successPath}?session_id={CHECKOUT_SESSION_ID}`;
 
     const session = await stripe.checkout.sessions.create({
       mode,
       line_items: [{ price: priceId, quantity: 1 }],
       success_url: successUrl,
       cancel_url: `${baseUrl}${cancelPath}`,
-      metadata: {
-        plan: normalizedPlan,
-        kind: derivedKind || (body.kind ?? ""), // ideally "photo"|"bid" for one_report, or "project_pass_14d"/"home_plus"
-        resultId: body.resultId ?? "",
-        // ✅ store returnTo ONLY if present
-        returnTo,
-      },
+      metadata: metaOut.metadata,
     });
 
     return NextResponse.json({
@@ -147,17 +157,9 @@ export async function POST(req: Request) {
         sessionId: session.id,
         mode,
         priceId,
-        planReceived: body.plan ?? null,
-        kindReceived: body.kind ?? null,
         successUrl,
-        returnTo: returnTo || null,
         cancelUrl: `${baseUrl}${cancelPath}`,
-        meta: {
-          plan: normalizedPlan,
-          kind: derivedKind || (body.kind ?? ""),
-          resultId: body.resultId ?? "",
-          returnTo: returnTo || null,
-        },
+        metadata: metaOut.metadata,
       },
     });
   } catch (err: any) {
