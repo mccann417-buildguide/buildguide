@@ -6,8 +6,6 @@ import { useRouter } from "next/navigation";
 import { setPlan, startProjectPass } from "../../lib/storage";
 import { markUnlocked } from "../../lib/history";
 
-export const dynamic = "force-dynamic";
-
 type Entitlement =
   | {
       type: "one_report";

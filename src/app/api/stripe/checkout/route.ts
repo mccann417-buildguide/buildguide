@@ -59,7 +59,7 @@ function pickMode(body: CheckoutBody): Stripe.Checkout.SessionCreateParams.Mode 
   return "payment";
 }
 
-// ✅ Always store metadata in a way verify can understand
+// Always store metadata in a way verify can understand
 function buildMetadata(body: CheckoutBody) {
   const plan = (body.plan || "").trim();
 
@@ -87,7 +87,7 @@ function buildMetadata(body: CheckoutBody) {
   const returnTo = (body.returnTo || "").trim();
   const resultId = (body.resultId || "").trim();
 
-  // ✅ Hard guard: one_report must know whether it's photo or bid
+  // Hard guard: one_report must know whether it's photo or bid
   if (normalizedPlan === "one_report" && (kind !== "photo" && kind !== "bid")) {
     return { error: 'Invalid one_report checkout. Use plan:"one_report_photo" or plan:"one_report_bid".' as string };
   }
@@ -97,7 +97,7 @@ function buildMetadata(body: CheckoutBody) {
       plan: normalizedPlan,
       kind, // "photo" | "bid" | "project_pass_14d" | "home_plus"
       resultId,
-      returnTo, // optional
+      returnTo,
     } as Record<string, string>,
   };
 }
@@ -131,8 +131,9 @@ export async function POST(req: Request) {
 
     const baseUrl = getBaseUrl(req);
 
-    // ✅ ALWAYS go to /checkout first, then /checkout/success verifies + redirects correctly
-    const successPath = "/checkout";
+    // ✅ Stripe SUCCESS must land on a page that verifies + redirects.
+    // Your verifier is /checkout/success (SuccessClient).
+    const successPath = "/checkout/success";
     const cancelPath = body.cancelPath ?? "/pricing";
     const mode = pickMode(body);
 

@@ -4,18 +4,20 @@
 import React, { Suspense, useEffect } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 
-export const dynamic = "force-dynamic";
-
 function CheckoutInner() {
   const router = useRouter();
   const params = useSearchParams();
 
   useEffect(() => {
     const sessionId = params.get("session_id");
+
     if (sessionId) {
+      // Send to the real success verifier page
       router.replace(`/checkout/success?session_id=${encodeURIComponent(sessionId)}`);
       return;
     }
+
+    // If someone hits /checkout directly without session_id
     router.replace("/pricing");
   }, [params, router]);
 
