@@ -65,6 +65,17 @@ function clearAddonUnlocked(resultId: string) {
   window.localStorage.removeItem(addonKey(resultId));
 }
 
+// ✅ CREDIT SUPPORT (fixes “paid → blank page” when purchase had no resultId)
+const PHOTO_CREDIT_KEY = "buildguide_credit_photo_v1";
+function hasPhotoCredit(): boolean {
+  if (typeof window === "undefined") return false;
+  return window.localStorage.getItem(PHOTO_CREDIT_KEY) === "1";
+}
+function consumePhotoCredit() {
+  if (typeof window === "undefined") return;
+  window.localStorage.removeItem(PHOTO_CREDIT_KEY);
+}
+
 function baseKey(id: string) {
   return `buildguide_photo_base_${id}`;
 }
@@ -305,6 +316,7 @@ function PhotoPageInner(props: {
           <div className="mt-2 text-xs text-neutral-600">
             Plan: <span className="font-semibold">{planId}</span> · Remaining photo checks:{" "}
             <span className="font-semibold">{remaining}</span>
+            {hasPhotoCredit() ? <span className="ml-2 font-semibold">· ✅ 1 Photo Credit</span> : null}
           </div>
         </div>
 
@@ -690,8 +702,7 @@ export default function PhotoPage() {
             setPlan("home_plus" as PlanId);
             setUnlockToast("✅ Subscription confirmed — Home Plus is active.");
           } else {
-            const onePhotoOk =
-              v.ok && vdata?.ok && entitlement?.type === "one_report" && entitlement?.kind === "photo";
+            const onePhotoOk = v.ok && vdata?.ok && entitlement?.type === "one_report" && entitlement?.kind === "photo";
 
             if (rid && onePhotoOk) {
               setAddonUnlocked(rid);
@@ -700,6 +711,9 @@ export default function PhotoPage() {
               setTimeout(() => {
                 generateDetailAI();
               }, 0);
+            } else if (onePhotoOk && !rid) {
+              // ✅ credit-based purchase (no resultId)
+              setUnlockToast("✅ Payment confirmed — 1 Photo Credit added. Run Analyze Photo to use it.");
             } else {
               setUnlockToast("⚠️ Payment not confirmed yet. If you just paid, refresh once.");
             }
@@ -756,6 +770,14 @@ export default function PhotoPage() {
       saveToHistory(next as any);
       trySaveBase(next.id, next);
 
+      // ✅ If user had a prepaid credit, apply it to THIS new result automatically
+      if (hasPhotoCredit()) {
+        setAddonUnlocked(String(next.id));
+        markUnlocked(String(next.id));
+        consumePhotoCredit();
+        setUnlockToast("✅ Photo Credit applied — Full Report unlocked for this photo.");
+      }
+
       try {
         const u = new URL(window.location.href);
         u.searchParams.set("resultId", String(next.id));
@@ -777,7 +799,6 @@ export default function PhotoPage() {
         trySaveBase(result.id, result);
       }
 
-      // ✅ FIX: send returnTo + cancelPath (NOT successPath)
       const returnTo = `/photo?resultId=${encodeURIComponent(targetResultId)}`;
 
       const res = await fetch("/api/stripe/checkout", {

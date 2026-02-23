@@ -68,6 +68,17 @@ function clearAddonUnlocked(resultId: string) {
   window.localStorage.removeItem(addonKey(resultId));
 }
 
+// ✅ CREDIT SUPPORT (fixes “paid → blank page” when purchase had no resultId)
+const BID_CREDIT_KEY = "buildguide_credit_bid_v1";
+function hasBidCredit(): boolean {
+  if (typeof window === "undefined") return false;
+  return window.localStorage.getItem(BID_CREDIT_KEY) === "1";
+}
+function consumeBidCredit() {
+  if (typeof window === "undefined") return;
+  window.localStorage.removeItem(BID_CREDIT_KEY);
+}
+
 // Store base/detail for “pay → return → auto-show full report”
 function baseKey(id: string) {
   return `buildguide_bid_base_${id}`;
@@ -285,20 +296,20 @@ function BidPageInner({
 
   const effectiveRid = (result?.id ?? paidRid) ? String(result?.id ?? paidRid) : null;
 
-  // ✅ “paid” = subscription/pass OR addon unlocked for this result
   const unlocked = isPaidPlan(planId) || (effectiveRid ? isAddonUnlocked(effectiveRid) : false);
 
-  const canAnalyze = allowed || unlocked;
+  // ✅ allow analyze if user has a prepaid credit
+  const hasCredit = hasBidCredit();
+  const canAnalyze = allowed || unlocked || hasCredit;
+
   const [formOpen, setFormOpen] = React.useState(true);
 
   const generateDetailAI = React.useCallback(async () => {
     if (!result) return;
 
-    // ✅ If user is paid via plan (home_plus/project_pass), allow generating detail without addon flag
     const isPlanPaid = isPaidPlan(planId);
     const rid = result?.id ? String(result.id) : null;
 
-    // If not paid plan, require addon unlock for this rid
     if (!isPlanPaid) {
       if (!rid) return;
       if (!isAddonUnlocked(rid)) return;
@@ -350,7 +361,6 @@ function BidPageInner({
     }
   }, [result, compare, notes, text, planId]);
 
-  // ✅ Auto-generate after unlock (addon OR plan)
   React.useEffect(() => {
     if (!unlocked) return;
     if (!result) return;
@@ -391,7 +401,6 @@ function BidPageInner({
           const vdata = await v.json().catch(() => null);
           const entitlement = vdata?.entitlement;
 
-          // ✅ Subscription
           const subOk =
             v.ok &&
             vdata?.ok &&
@@ -402,7 +411,6 @@ function BidPageInner({
             setPlan("home_plus");
             setUnlockToast("✅ Subscription confirmed — Pro is active.");
           } else {
-            // ✅ One-report BID unlock only
             const oneBidOk = v.ok && vdata?.ok && entitlement?.type === "one_report" && entitlement?.kind === "bid";
 
             if (rid && oneBidOk) {
@@ -412,6 +420,9 @@ function BidPageInner({
               setTimeout(() => {
                 generateDetailAI();
               }, 0);
+            } else if (oneBidOk && !rid) {
+              // ✅ credit-based purchase (no resultId)
+              setUnlockToast("✅ Payment confirmed — 1 Bid Credit added. Run Analyze Bid to use it.");
             } else {
               setUnlockToast("⚠️ Payment not confirmed yet. If you just paid, refresh once.");
             }
@@ -450,7 +461,7 @@ function BidPageInner({
 
       const next = data as BidAnalysisResult;
 
-      // ✅ New results start locked unless plan is paid OR Stripe verify confirms for this rid
+      // New results start locked
       clearAddonUnlocked(String(next.id));
 
       setResult(next);
@@ -458,6 +469,14 @@ function BidPageInner({
       incrementUsage("bid");
       saveToHistory(next);
       trySaveBase(next.id, next);
+
+      // ✅ If user had a prepaid credit, apply it to THIS new result automatically
+      if (hasBidCredit()) {
+        setAddonUnlocked(String(next.id));
+        markUnlocked(String(next.id));
+        consumeBidCredit();
+        setUnlockToast("✅ Bid Credit applied — Full Report unlocked for this bid.");
+      }
 
       try {
         const u = new URL(window.location.href);
@@ -486,7 +505,6 @@ function BidPageInner({
         saveToHistory(result);
       }
 
-      // ✅ FIX: send returnTo + cancelPath (NOT successPath)
       const rid = String(targetResultId);
       const returnTo = `/bid?resultId=${encodeURIComponent(rid)}`;
 
@@ -566,6 +584,7 @@ function BidPageInner({
           <div className="mt-2 text-xs text-neutral-600">
             Plan: <span className="font-semibold">{planId}</span> · Remaining bid checks:{" "}
             <span className="font-semibold">{remaining}</span>
+            {hasCredit ? <span className="ml-2 font-semibold">· ✅ 1 Bid Credit</span> : null}
           </div>
         </div>
 
@@ -589,7 +608,6 @@ function BidPageInner({
         quote="BuildGuide helped me ask the right questions — I felt confident signing once I saw what was missing."
       />
 
-      {/* ✅ If user is on Home Plus / Project Pass, do NOT show $2.99 upsell card */}
       {result && !unlocked && !isPaidPlan(planId) ? (
         <FullReportCard
           hasResult={!!result}
