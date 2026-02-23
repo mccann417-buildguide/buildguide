@@ -12,6 +12,9 @@ import { FeatureGate } from "../components/FeatureGate";
 import { incrementUsage, setPlan } from "../lib/storage";
 import { TestimonialCard } from "../components/TestimonialCard";
 
+export const dynamic = "force-dynamic";
+export const revalidate = 0;
+
 type Verdict =
   | "significantly_below_market"
   | "below_market"
@@ -66,6 +69,26 @@ function setAddonUnlocked(resultId: string) {
 function clearAddonUnlocked(resultId: string) {
   if (typeof window === "undefined") return;
   window.localStorage.removeItem(addonKey(resultId));
+}
+
+/**
+ * ✅ CREDIT UNLOCK (device-independent):
+ * After Stripe success, SuccessClient can set:
+ *   localStorage.setItem("buildguide_credit_bid_v1", "1")
+ * Then the next Analyze Bid consumes the credit and unlocks that new reportId.
+ */
+function bidCreditKey() {
+  return "buildguide_credit_bid_v1";
+}
+function hasBidCredit(): boolean {
+  if (typeof window === "undefined") return false;
+  return window.localStorage.getItem(bidCreditKey()) === "1";
+}
+function consumeBidCredit() {
+  if (typeof window === "undefined") return;
+  try {
+    window.localStorage.removeItem(bidCreditKey());
+  } catch {}
 }
 
 // Store base/detail for “pay → return → auto-show full report”
@@ -201,8 +224,7 @@ function FullReportCard({
 
         {!hasResult ? (
           <div className="mt-3 text-xs text-neutral-600">
-            Tip: Run <span className="font-semibold">Analyze Bid</span> first — then unlock applies to that specific
-            report.
+            Tip: Run <span className="font-semibold">Analyze Bid</span> first — then unlock applies to that specific report.
           </div>
         ) : null}
       </div>
@@ -286,10 +308,13 @@ function BidPageInner({
 
   const effectiveRid = (result?.id ?? paidRid) ? String(result?.id ?? paidRid) : null;
 
-  // ✅ “paid” = subscription/pass OR addon unlocked for this result
-  const unlocked = isPaidPlan(planId) || (effectiveRid ? isAddonUnlocked(effectiveRid) : false);
+  // ✅ “paid” = subscription/pass OR addon unlocked for this result OR bid credit
+  const unlocked =
+    isPaidPlan(planId) ||
+    (effectiveRid ? isAddonUnlocked(effectiveRid) : false) ||
+    (result ? hasBidCredit() : false);
 
-  const canAnalyze = allowed || unlocked;
+  const canAnalyze = allowed || unlocked || hasBidCredit();
   const [formOpen, setFormOpen] = React.useState(true);
 
   const generateDetailAI = React.useCallback(async () => {
@@ -356,8 +381,19 @@ function BidPageInner({
     if (!unlocked) return;
     if (!result) return;
     if (detail || detailLoading) return;
+
+    // If we are unlocked via BID CREDIT, apply it to this specific result id + consume credit
+    if (!isPaidPlan(planId) && result?.id && hasBidCredit()) {
+      try {
+        setAddonUnlocked(String(result.id));
+        markUnlocked(String(result.id));
+      } catch {}
+      consumeBidCredit();
+      setUnlockToast("✅ Credit applied — Full Report unlocked for this bid.");
+    }
+
     generateDetailAI();
-  }, [unlocked, result, detail, detailLoading, generateDetailAI]);
+  }, [unlocked, result, detail, detailLoading, generateDetailAI, planId]);
 
   React.useEffect(() => {
     (async () => {
@@ -365,6 +401,11 @@ function BidPageInner({
         const sp = new URLSearchParams(window.location.search);
         const rid = sp.get("resultId") ?? "";
         const sessionId = sp.get("session_id") ?? "";
+        const credit = sp.get("credit") ?? "";
+
+        if (credit === "1") {
+          setUnlockToast("✅ Purchase detected — paste the bid and click Analyze. Your unlock will apply automatically.");
+        }
 
         if (rid) setPaidRid(rid);
 
@@ -373,22 +414,9 @@ function BidPageInner({
           if (fromHistory) {
             setResult(fromHistory);
             trySaveBase(rid, fromHistory);
-            setFormOpen(false);
           } else {
             const fromLS = tryLoadBase(rid);
-            if (fromLS) {
-              setResult(fromLS);
-              setFormOpen(false);
-            } else {
-              // ✅ This is the “blank page” case: resultId exists but base data is missing on this device.
-              // If they already paid (addon key exists), tell them to paste bid again — unlock will apply automatically.
-              if (isAddonUnlocked(rid)) {
-                setUnlockToast(
-                  "✅ Purchase detected for this report — paste the bid again and click Analyze. Your unlock will apply automatically."
-                );
-              }
-              setFormOpen(true);
-            }
+            if (fromLS) setResult(fromLS);
           }
 
           const cachedDetail = tryLoadDetail(rid);
@@ -416,7 +444,9 @@ function BidPageInner({
             setPlan("home_plus");
             setUnlockToast("✅ Subscription confirmed — Pro is active.");
           } else {
-            // ✅ One-report BID unlock only
+            // ✅ One-report BID unlock:
+            // If the session includes rid, unlock that rid.
+            // If rid is missing (different device), SuccessClient will set bid credit instead.
             const oneBidOk = v.ok && vdata?.ok && entitlement?.type === "one_report" && entitlement?.kind === "bid";
 
             if (rid && oneBidOk) {
@@ -426,6 +456,8 @@ function BidPageInner({
               setTimeout(() => {
                 generateDetailAI();
               }, 0);
+            } else if (oneBidOk) {
+              setUnlockToast("✅ Purchase detected — paste the bid and click Analyze. Your unlock will apply automatically.");
             } else {
               setUnlockToast("⚠️ Payment not confirmed yet. If you just paid, refresh once.");
             }
@@ -453,19 +485,10 @@ function BidPageInner({
     setDetailError(null);
 
     try {
-      // ✅ KEY FIX:
-      // If the URL has resultId (ex: returning from Stripe / shared link),
-      // send it to /api/bid so the server reuses the SAME UUID.
-      const stableRid = paidRid || new URLSearchParams(window.location.search).get("resultId") || null;
-
       const res = await fetch("/api/bid", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          text,
-          notes: notes.trim() || undefined,
-          resultId: stableRid || undefined,
-        }),
+        body: JSON.stringify({ text, notes: notes.trim() || undefined }),
       });
 
       const data = await res.json().catch(() => null);
@@ -473,12 +496,8 @@ function BidPageInner({
 
       const next = data as BidAnalysisResult;
 
-      // ✅ New results start locked unless plan is paid OR Stripe verify confirms for this rid
-      // BUT: if we were regenerating a paid resultId, we must NOT wipe the unlock.
-      const usingStableRid = !!stableRid && String(next.id) === String(stableRid);
-      if (!usingStableRid) {
-        clearAddonUnlocked(String(next.id));
-      }
+      // ✅ New results start locked unless plan is paid OR credit applies OR Stripe verify confirms for this rid
+      clearAddonUnlocked(String(next.id));
 
       setResult(next);
 
@@ -493,6 +512,16 @@ function BidPageInner({
         setPaidRid(String(next.id));
       } catch {}
 
+      // ✅ If user has a bid credit, apply it to THIS new report immediately
+      if (!isPaidPlan(planId) && hasBidCredit()) {
+        try {
+          setAddonUnlocked(String(next.id));
+          markUnlocked(String(next.id));
+        } catch {}
+        consumeBidCredit();
+        setUnlockToast("✅ Credit applied — Full Report unlocked for this bid.");
+      }
+
       setFormOpen(false);
 
       requestAnimationFrame(() => {
@@ -505,23 +534,20 @@ function BidPageInner({
     }
   }
 
-  async function startStripeUnlock(targetResultId: string) {
+  async function startStripeUnlock(_targetResultId: string) {
     setUnlockBusy(true);
     try {
-      if (result?.id && String(result.id) === String(targetResultId)) {
-        trySaveBase(result.id, result);
-        saveToHistory(result);
-      }
-
-      const rid = String(targetResultId);
-      const returnTo = `/bid?resultId=${encodeURIComponent(rid)}`;
+      // ✅ IMPORTANT CHANGE:
+      // We do NOT bind $2.99 to a specific resultId anymore (device-local problem).
+      // We treat it as a BID CREDIT.
+      const returnTo = `/bid?credit=1`;
 
       const res = await fetch("/api/stripe/checkout", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           plan: "one_report_bid",
-          resultId: rid,
+          // resultId intentionally omitted so SuccessClient stores a BID CREDIT
           returnTo,
           cancelPath: returnTo,
         }),
@@ -624,13 +650,7 @@ function BidPageInner({
           onGoHomePlus={() => {
             window.location.href = "/pricing";
           }}
-          onUnlock={() => {
-            if (!result?.id) {
-              alert("Run Analyze Bid first so we can unlock the correct report.");
-              return;
-            }
-            return startStripeUnlock(String(result.id));
-          }}
+          onUnlock={() => startStripeUnlock(String(result?.id || ""))}
         />
       ) : null}
 
@@ -681,10 +701,7 @@ function BidPageInner({
                     <div className="mt-1">
                       Bid total detected: <span className="font-semibold">{detail.marketComparison.bidTotal}</span>
                       {detail.marketComparison.confidence ? (
-                        <span className="text-xs text-neutral-600">
-                          {" "}
-                          · confidence: {detail.marketComparison.confidence}
-                        </span>
+                        <span className="text-xs text-neutral-600"> · confidence: {detail.marketComparison.confidence}</span>
                       ) : null}
                     </div>
                   ) : null}
