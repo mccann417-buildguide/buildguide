@@ -184,7 +184,7 @@ function FullReportCard({
             onClick={onUnlock}
             disabled={disabled}
             className="rounded-xl bg-black text-white px-4 py-2.5 text-sm font-medium hover:bg-black/90 disabled:opacity-50"
-            title={!hasResult ? "Run Analyze Bid first so the unlock applies to that report" : ""}
+            title={!hasResult ? "Run Get Cost Insight first so the unlock applies to that report" : ""}
           >
             Unlock Full Report $2.99
           </button>
@@ -203,7 +203,7 @@ function FullReportCard({
         <div className="text-sm font-semibold">What you’ll get</div>
         <ul className="mt-3 space-y-2 text-sm text-neutral-800">
           {[
-            "Local pricing range (low / typical / high) and where your bid sits",
+            "Local pricing range (low / typical / high) and where your estimate sits",
             "Deterministic sanity checks (no fake ranges)",
             "Deeper scope gap detection + negotiation tips",
             "Payment schedule red flags + contract warnings",
@@ -218,7 +218,8 @@ function FullReportCard({
 
         {!hasResult ? (
           <div className="mt-3 text-xs text-neutral-600">
-            Tip: Run <span className="font-semibold">Analyze Bid</span> first — then unlock applies to that specific report.
+            Tip: Run <span className="font-semibold">Get Cost Insight</span> first — then unlock applies to that specific
+            report.
           </div>
         ) : null}
       </div>
@@ -239,9 +240,11 @@ function AnalyzeAnotherBid({
     <div className="rounded-2xl border p-5">
       <button type="button" onClick={() => setOpen(!open)} className="w-full flex items-center justify-between text-left">
         <div>
-          <div className="text-sm font-semibold">{open ? "Analyze a bid" : "Analyze another bid"}</div>
+          <div className="text-sm font-semibold">{open ? "Get cost insight" : "Run another cost check"}</div>
           <div className="mt-1 text-xs text-neutral-600">
-            {open ? "Paste a bid below." : "Open to paste a different bid and generate a new report."}
+            {open
+              ? "Describe your project idea or paste an estimate below."
+              : "Open to check a different project (or compare another contractor estimate)."}
           </div>
         </div>
         <div className="text-sm text-neutral-600">{open ? "▲" : "▼"}</div>
@@ -421,13 +424,13 @@ function BidPageInner({
               if (rid) {
                 setAddonUnlocked(rid);
                 markUnlocked(rid);
-                setUnlockToast("✅ Payment confirmed — Full Bid Report unlocked.");
+                setUnlockToast("✅ Payment confirmed — Full Report unlocked.");
                 setTimeout(() => {
                   generateDetailAI();
                 }, 0);
               } else {
                 setCredit();
-                setUnlockToast("✅ Payment confirmed — you have a Bid unlock credit. Run Analyze Bid to apply it.");
+                setUnlockToast("✅ Payment confirmed — you have a cost-check unlock credit. Run Get Cost Insight to apply it.");
               }
             } else {
               setUnlockToast("⚠️ Payment not confirmed yet. If you just paid, refresh once.");
@@ -463,7 +466,7 @@ function BidPageInner({
       });
 
       const data = await res.json().catch(() => null);
-      if (!res.ok) throw new Error(data?.error ?? "Bid analysis failed.");
+      if (!res.ok) throw new Error(data?.error ?? "Analysis failed.");
 
       const next = data as BidAnalysisResult;
 
@@ -480,7 +483,7 @@ function BidPageInner({
         setAddonUnlocked(String(next.id));
         markUnlocked(String(next.id));
         clearCredit();
-        setUnlockToast("✅ Applied your Bid unlock credit — Full Report unlocked.");
+        setUnlockToast("✅ Applied your unlock credit — Full Report unlocked.");
         setTimeout(() => {
           generateDetailAI();
         }, 0);
@@ -584,12 +587,13 @@ function BidPageInner({
 
       <div className="flex items-center justify-between gap-3">
         <div>
-          <h1 className="text-2xl font-semibold">Bid Check</h1>
+          <h1 className="text-2xl font-semibold">Project Cost & Bid Check</h1>
           <p className="mt-1 text-neutral-700">
-            Paste an estimate. BuildGuide highlights what’s included, what’s missing, and red flags.
+            Describe your project idea <span className="font-medium">or</span> paste a contractor estimate. BuildGuide
+            generates a realistic local cost range and highlights missing scope and risk flags before you commit.
           </p>
           <div className="mt-2 text-xs text-neutral-600">
-            Plan: <span className="font-semibold">{planId}</span> · Remaining bid checks:{" "}
+            Plan: <span className="font-semibold">{planId}</span> · Remaining checks:{" "}
             <span className="font-semibold">{remaining}</span>
           </div>
         </div>
@@ -616,14 +620,15 @@ function BidPageInner({
 
       {!result && paidRid && isAddonUnlocked(String(paidRid)) ? (
         <div className="rounded-2xl border bg-neutral-50 p-4 text-sm text-neutral-800">
-          ✅ Payment is confirmed for this Bid Report (ID: <span className="font-semibold">{paidRid}</span>), but the base
-          report isn’t available on this device. If you have a Bid credit, run Analyze Bid and it will apply automatically.
+          ✅ Payment is confirmed for this report (ID: <span className="font-semibold">{paidRid}</span>), but the base
+          report isn’t available on this device. If you have an unlock credit, run Get Cost Insight and it will apply
+          automatically.
         </div>
       ) : null}
 
       {hasCredit() ? (
         <div className="rounded-2xl border bg-emerald-50 p-4 text-sm text-emerald-900">
-          ✅ You have a saved $2.99 Bid unlock credit. Run Analyze Bid and it will unlock automatically.
+          ✅ You have a saved $2.99 unlock credit. Run Get Cost Insight and it will unlock automatically.
         </div>
       ) : null}
 
@@ -637,7 +642,7 @@ function BidPageInner({
           }}
           onUnlock={() => {
             if (!result?.id) {
-              alert("Run Analyze Bid first so we can unlock the correct report.");
+              alert("Run Get Cost Insight first so we can unlock the correct report.");
               return;
             }
             return startStripeUnlock(String(result.id));
@@ -766,12 +771,17 @@ function BidPageInner({
 
       <AnalyzeAnotherBid open={formOpen || !result} setOpen={setFormOpen}>
         <div className="space-y-4">
-          <div className="text-sm font-semibold">1) Paste your bid</div>
+          <div className="text-sm font-semibold">1) Describe your project or paste an estimate</div>
+
+          <div className="text-xs text-neutral-600">
+            No bid yet? Paste your renovation idea and location — we’ll generate a realistic local cost range to guide your
+            planning.
+          </div>
 
           <textarea
             value={text}
             onChange={(e) => setText(e.target.value)}
-            placeholder="Paste the full bid/estimate text here..."
+            placeholder="Example: “Kitchen remodel in Troy NY 12180 — new cabinets, counters, flooring, paint. Mid-grade finishes. No layout changes.” Or paste a contractor bid/estimate..."
             className="w-full min-h-[180px] rounded-2xl border p-3 text-sm"
           />
 
@@ -839,7 +849,7 @@ function BidPageInner({
             disabled={!text.trim() || loading}
             className="rounded-xl bg-black text-white px-5 py-3 text-sm font-medium disabled:opacity-50 hover:bg-black/90"
           >
-            {loading ? "Analyzing..." : "Analyze Bid"}
+            {loading ? "Analyzing..." : "Get Cost Insight"}
           </button>
 
           {error ? <div className="text-sm text-red-600">{error}</div> : null}
