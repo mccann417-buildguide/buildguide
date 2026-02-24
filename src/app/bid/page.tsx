@@ -12,9 +12,6 @@ import { FeatureGate } from "../components/FeatureGate";
 import { incrementUsage, setPlan } from "../lib/storage";
 import { TestimonialCard } from "../components/TestimonialCard";
 
-export const dynamic = "force-dynamic";
-export const revalidate = 0;
-
 type Verdict =
   | "significantly_below_market"
   | "below_market"
@@ -71,24 +68,21 @@ function clearAddonUnlocked(resultId: string) {
   window.localStorage.removeItem(addonKey(resultId));
 }
 
-/**
- * ✅ CREDIT UNLOCK (device-independent):
- * After Stripe success, SuccessClient can set:
- *   localStorage.setItem("buildguide_credit_bid_v1", "1")
- * Then the next Analyze Bid consumes the credit and unlocks that new reportId.
- */
-function bidCreditKey() {
+// ✅ Credit fallback (prevents losing $2.99 if resultId/base isn't available)
+function creditKey() {
   return "buildguide_credit_bid_v1";
 }
-function hasBidCredit(): boolean {
+function hasCredit(): boolean {
   if (typeof window === "undefined") return false;
-  return window.localStorage.getItem(bidCreditKey()) === "1";
+  return window.localStorage.getItem(creditKey()) === "1";
 }
-function consumeBidCredit() {
+function setCredit() {
   if (typeof window === "undefined") return;
-  try {
-    window.localStorage.removeItem(bidCreditKey());
-  } catch {}
+  window.localStorage.setItem(creditKey(), "1");
+}
+function clearCredit() {
+  if (typeof window === "undefined") return;
+  window.localStorage.removeItem(creditKey());
 }
 
 // Store base/detail for “pay → return → auto-show full report”
@@ -308,23 +302,18 @@ function BidPageInner({
 
   const effectiveRid = (result?.id ?? paidRid) ? String(result?.id ?? paidRid) : null;
 
-  // ✅ “paid” = subscription/pass OR addon unlocked for this result OR bid credit
-  const unlocked =
-    isPaidPlan(planId) ||
-    (effectiveRid ? isAddonUnlocked(effectiveRid) : false) ||
-    (result ? hasBidCredit() : false);
+  // ✅ “paid” = subscription/pass OR addon unlocked for this result
+  const unlocked = isPaidPlan(planId) || (effectiveRid ? isAddonUnlocked(effectiveRid) : false);
 
-  const canAnalyze = allowed || unlocked || hasBidCredit();
+  const canAnalyze = allowed || unlocked;
   const [formOpen, setFormOpen] = React.useState(true);
 
   const generateDetailAI = React.useCallback(async () => {
     if (!result) return;
 
-    // ✅ If user is paid via plan (home_plus/project_pass), allow generating detail without addon flag
     const isPlanPaid = isPaidPlan(planId);
     const rid = result?.id ? String(result.id) : null;
 
-    // If not paid plan, require addon unlock for this rid
     if (!isPlanPaid) {
       if (!rid) return;
       if (!isAddonUnlocked(rid)) return;
@@ -376,24 +365,12 @@ function BidPageInner({
     }
   }, [result, compare, notes, text, planId]);
 
-  // ✅ Auto-generate after unlock (addon OR plan)
   React.useEffect(() => {
     if (!unlocked) return;
     if (!result) return;
     if (detail || detailLoading) return;
-
-    // If we are unlocked via BID CREDIT, apply it to this specific result id + consume credit
-    if (!isPaidPlan(planId) && result?.id && hasBidCredit()) {
-      try {
-        setAddonUnlocked(String(result.id));
-        markUnlocked(String(result.id));
-      } catch {}
-      consumeBidCredit();
-      setUnlockToast("✅ Credit applied — Full Report unlocked for this bid.");
-    }
-
     generateDetailAI();
-  }, [unlocked, result, detail, detailLoading, generateDetailAI, planId]);
+  }, [unlocked, result, detail, detailLoading, generateDetailAI]);
 
   React.useEffect(() => {
     (async () => {
@@ -401,11 +378,6 @@ function BidPageInner({
         const sp = new URLSearchParams(window.location.search);
         const rid = sp.get("resultId") ?? "";
         const sessionId = sp.get("session_id") ?? "";
-        const credit = sp.get("credit") ?? "";
-
-        if (credit === "1") {
-          setUnlockToast("✅ Purchase detected — paste the bid and click Analyze. Your unlock will apply automatically.");
-        }
 
         if (rid) setPaidRid(rid);
 
@@ -433,7 +405,6 @@ function BidPageInner({
           const vdata = await v.json().catch(() => null);
           const entitlement = vdata?.entitlement;
 
-          // ✅ Subscription
           const subOk =
             v.ok &&
             vdata?.ok &&
@@ -442,22 +413,22 @@ function BidPageInner({
 
           if (subOk) {
             setPlan("home_plus");
-            setUnlockToast("✅ Subscription confirmed — Pro is active.");
+            setUnlockToast("✅ Subscription confirmed — Home Plus is active.");
           } else {
-            // ✅ One-report BID unlock:
-            // If the session includes rid, unlock that rid.
-            // If rid is missing (different device), SuccessClient will set bid credit instead.
             const oneBidOk = v.ok && vdata?.ok && entitlement?.type === "one_report" && entitlement?.kind === "bid";
 
-            if (rid && oneBidOk) {
-              setAddonUnlocked(rid);
-              markUnlocked(rid);
-              setUnlockToast("✅ Payment confirmed — Full Report unlocked.");
-              setTimeout(() => {
-                generateDetailAI();
-              }, 0);
-            } else if (oneBidOk) {
-              setUnlockToast("✅ Purchase detected — paste the bid and click Analyze. Your unlock will apply automatically.");
+            if (oneBidOk) {
+              if (rid) {
+                setAddonUnlocked(rid);
+                markUnlocked(rid);
+                setUnlockToast("✅ Payment confirmed — Full Bid Report unlocked.");
+                setTimeout(() => {
+                  generateDetailAI();
+                }, 0);
+              } else {
+                setCredit();
+                setUnlockToast("✅ Payment confirmed — you have a Bid unlock credit. Run Analyze Bid to apply it.");
+              }
             } else {
               setUnlockToast("⚠️ Payment not confirmed yet. If you just paid, refresh once.");
             }
@@ -496,7 +467,6 @@ function BidPageInner({
 
       const next = data as BidAnalysisResult;
 
-      // ✅ New results start locked unless plan is paid OR credit applies OR Stripe verify confirms for this rid
       clearAddonUnlocked(String(next.id));
 
       setResult(next);
@@ -505,22 +475,23 @@ function BidPageInner({
       saveToHistory(next);
       trySaveBase(next.id, next);
 
+      // ✅ Apply credit if present (prevents losing $2.99)
+      if (hasCredit()) {
+        setAddonUnlocked(String(next.id));
+        markUnlocked(String(next.id));
+        clearCredit();
+        setUnlockToast("✅ Applied your Bid unlock credit — Full Report unlocked.");
+        setTimeout(() => {
+          generateDetailAI();
+        }, 0);
+      }
+
       try {
         const u = new URL(window.location.href);
         u.searchParams.set("resultId", String(next.id));
         window.history.replaceState({}, "", u.toString());
         setPaidRid(String(next.id));
       } catch {}
-
-      // ✅ If user has a bid credit, apply it to THIS new report immediately
-      if (!isPaidPlan(planId) && hasBidCredit()) {
-        try {
-          setAddonUnlocked(String(next.id));
-          markUnlocked(String(next.id));
-        } catch {}
-        consumeBidCredit();
-        setUnlockToast("✅ Credit applied — Full Report unlocked for this bid.");
-      }
 
       setFormOpen(false);
 
@@ -534,22 +505,24 @@ function BidPageInner({
     }
   }
 
-  async function startStripeUnlock(_targetResultId: string) {
+  async function startStripeUnlock(targetResultId: string) {
     setUnlockBusy(true);
     try {
-      // ✅ IMPORTANT CHANGE:
-      // We do NOT bind $2.99 to a specific resultId anymore (device-local problem).
-      // We treat it as a BID CREDIT.
-      const returnTo = `/bid?credit=1`;
+      if (result?.id && String(result.id) === String(targetResultId)) {
+        trySaveBase(result.id, result);
+        saveToHistory(result);
+      }
+
+      const returnPath = `/bid?resultId=${encodeURIComponent(targetResultId)}`;
 
       const res = await fetch("/api/stripe/checkout", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           plan: "one_report_bid",
-          // resultId intentionally omitted so SuccessClient stores a BID CREDIT
-          returnTo,
-          cancelPath: returnTo,
+          resultId: String(targetResultId),
+          returnTo: returnPath,
+          cancelPath: returnPath,
         }),
       });
 
@@ -641,7 +614,19 @@ function BidPageInner({
         quote="BuildGuide helped me ask the right questions — I felt confident signing once I saw what was missing."
       />
 
-      {/* ✅ If user is on Home Plus / Project Pass, do NOT show $2.99 upsell card */}
+      {!result && paidRid && isAddonUnlocked(String(paidRid)) ? (
+        <div className="rounded-2xl border bg-neutral-50 p-4 text-sm text-neutral-800">
+          ✅ Payment is confirmed for this Bid Report (ID: <span className="font-semibold">{paidRid}</span>), but the base
+          report isn’t available on this device. If you have a Bid credit, run Analyze Bid and it will apply automatically.
+        </div>
+      ) : null}
+
+      {hasCredit() ? (
+        <div className="rounded-2xl border bg-emerald-50 p-4 text-sm text-emerald-900">
+          ✅ You have a saved $2.99 Bid unlock credit. Run Analyze Bid and it will unlock automatically.
+        </div>
+      ) : null}
+
       {result && !unlocked && !isPaidPlan(planId) ? (
         <FullReportCard
           hasResult={!!result}
@@ -650,7 +635,13 @@ function BidPageInner({
           onGoHomePlus={() => {
             window.location.href = "/pricing";
           }}
-          onUnlock={() => startStripeUnlock(String(result?.id || ""))}
+          onUnlock={() => {
+            if (!result?.id) {
+              alert("Run Analyze Bid first so we can unlock the correct report.");
+              return;
+            }
+            return startStripeUnlock(String(result.id));
+          }}
         />
       ) : null}
 
